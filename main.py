@@ -6,10 +6,9 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 
 
-def generate_answers(resume_text, role, company, questions_str, word_limit, api_key):
+def generate_answers(resume_text, role, company, questions_list, word_limit, api_key):
     """Generates answers to interview questions based on the resume and inputs."""
-    questions = [q.strip() for q in questions_str.split(";") if q.strip()]
-    if not questions:
+    if not questions_list:
         return []
 
     llm = GoogleGenerativeAI(
@@ -38,7 +37,7 @@ def generate_answers(resume_text, role, company, questions_str, word_limit, api_
     chain = LLMChain(llm=llm, prompt=prompt)
 
     results = []
-    for q in questions:
+    for q in questions_list:  # Iterate over the provided list
         try:
             answer = chain.run(
                 resume=resume_text,
@@ -86,16 +85,31 @@ def main():
 
     /* Button styling */
     .stButton>button {
-        background-color: #FF8C00; /* Deeper orange background for buttons */
+        background-color: #FF8C00; /* Fallback background color */
+        background-image: linear-gradient(to right, #FF8C00 0%, #FFA500 50%, #FF8C00 100%); /* Orange gradient */
         color: #1A1A1A; /* Dark text for buttons */
         border-radius: 6px;
         border: 1px solid #E07B00; /* Slightly darker orange border */
         font-weight: bold;
     }
     .stButton>button:hover {
-        background-color: #E07B00; /* Darker orange on hover */
+        background-color: #E07B00; /* Fallback background color */
+        background-image: linear-gradient(to right, #E07B00 0%, #FF8C00 50%, #E07B00 100%); /* Darker orange gradient on hover */
         color: #FFFFFF;
         border: 1px solid #FFAD33; /* Lighter orange border on hover for contrast */
+    }
+
+    /* Specific styling for Remove Question button */
+    div[data-testid="column"] button {
+        background-color: #4A4A4A !important; /* Darker grey for remove button */
+        color: #D0D0D0 !important; /* Lighter text */
+        border: 1px solid #333333 !important;
+        background-image: none !important; /* Remove gradient for this specific button */
+    }
+    div[data-testid="column"] button:hover {
+        background-color: #5A5A5A !important;
+        color: #FFFFFF !important;
+        border: 1px solid #FF8C00 !important;
     }
 
     /* Input fields styling */
@@ -176,8 +190,8 @@ def main():
         unsafe_allow_html=True,
     )
 
-    st.title("Interview Spark: AI Prep Co-Pilot")
-    st.markdown("Ignite your interview success. Let's craft winning answers together.")
+    st.title("Hire Helper: AI Prep Co-Pilot")
+    st.markdown("Ignite your success. Let's craft winning answers together.")
 
     if not GOOGLE_API_KEY:
         st.error(
@@ -199,11 +213,43 @@ def main():
     )
 
     st.sidebar.header("Interview Intel")
-    raw_qs = st.sidebar.text_area(
-        "Enter Interview Questions (separated by ';')",
-        placeholder="e.g., Tell me about a challenging project; Describe your leadership style.",
-        height=150,
+
+    if "questions" not in st.session_state:
+        st.session_state.questions = [""]
+
+    def add_question_field():
+        st.session_state.questions.append("")
+
+    def remove_question_field(index):
+        if len(st.session_state.questions) > 1:
+            st.session_state.questions.pop(index)
+        else:
+            st.session_state.questions[index] = ""  # Clear if only one question
+
+    for i, q_text in enumerate(st.session_state.questions):
+        cols = st.sidebar.columns([0.85, 0.15])
+        st.session_state.questions[i] = cols[0].text_input(
+            f"Question {i+1}",
+            value=q_text,
+            key=f"question_{i}",
+            label_visibility="collapsed",
+            placeholder=f"Enter question {i+1}",
+        )
+        if len(st.session_state.questions) > 1:
+            cols[1].button(
+                "-",
+                key=f"remove_q_{i}",
+                on_click=remove_question_field,
+                args=(i,),
+                use_container_width=True,
+            )
+        else:
+            cols[1].empty()  # Keep layout consistent
+
+    st.sidebar.button(
+        "Add Question", on_click=add_question_field, use_container_width=True
     )
+
     word_limit = st.sidebar.number_input(
         "Word limit per answer:", min_value=20, max_value=500, value=100, step=10
     )
@@ -215,16 +261,29 @@ def main():
             st.warning("Please specify the target role.")
         elif not company:
             st.warning("Please specify the target company.")
-        elif not raw_qs:
-            st.warning("Please enter the interview questions.")
+        elif not any(q.strip() for q in st.session_state.questions):
+            st.warning("Please enter at least one interview question.")
         else:
             try:
                 resume_bytes = uploaded_resume.read()
                 resume_text = resume_bytes.decode()
 
+                # Filter out empty questions before passing to generate_answers
+                valid_questions = [
+                    q.strip() for q in st.session_state.questions if q.strip()
+                ]
+                if not valid_questions:
+                    st.warning("Please ensure at least one question is filled out.")
+                    st.stop()
+
                 with st.spinner("AI is crafting your answers... Please wait..."):
                     answers = generate_answers(
-                        resume_text, role, company, raw_qs, word_limit, GOOGLE_API_KEY
+                        resume_text,
+                        role,
+                        company,
+                        valid_questions,
+                        word_limit,
+                        GOOGLE_API_KEY,
                     )
 
                 if answers:
