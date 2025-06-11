@@ -87,8 +87,8 @@ def format_resume_text_with_llm(raw_text, api_key):
         return ""
     try:
         llm = GoogleGenerativeAI(
-            model="gemini-2.0-flash",  # Using gemini-2.0-flash as a light model
-            temperature=0.1,  # Low temperature for more deterministic formatting
+            model="gemini-2.0-flash",
+            temperature=0.1,
             api_key=api_key,
         )
         template = """
@@ -112,10 +112,12 @@ def format_resume_text_with_llm(raw_text, api_key):
         )
         chain = LLMChain(llm=llm, prompt=prompt)
         formatted_text = chain.run(raw_resume_text=raw_text)
+        print(f"Formatted resume text: {formatted_text}")
         return formatted_text.strip()
+
     except Exception as e:
         st.error(f"Error formatting resume text with LLM: {e}")
-        return raw_text  # Fallback to raw text if formatting fails
+        return raw_text
 
 
 def main():
@@ -127,6 +129,14 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    # Initialize session state for copy functionality
+    if "text_to_copy" not in st.session_state:
+        st.session_state.text_to_copy = ""
+    if "show_copy_area" not in st.session_state:
+        st.session_state.show_copy_area = False
+    if "copied_question_num" not in st.session_state:
+        st.session_state.copied_question_num = None
 
     # Custom CSS for dark theme with deeper orange accents
     st.markdown(
@@ -385,13 +395,44 @@ def main():
 
                 if answers:
                     st.success("Answers generated successfully:")
+
+                    # Display area for copying if activated
+                    if (
+                        st.session_state.show_copy_area
+                        and st.session_state.text_to_copy
+                    ):
+                        st.info(
+                            f"📋 Answer for Q{st.session_state.copied_question_num} is ready to copy from the text area below:"
+                        )
+                        st.text_area(
+                            "",
+                            st.session_state.text_to_copy,
+                            height=150,
+                            key="copy_area_field",
+                            label_visibility="collapsed",
+                        )
+                        if st.button("Hide Copy Area", key="done_copying_btn"):
+                            st.session_state.show_copy_area = False
+                            st.session_state.text_to_copy = ""
+                            st.session_state.copied_question_num = None
+                            st.experimental_rerun()
+                        st.markdown("---")  # Separator after copy area
+
                     for i, item in enumerate(answers, start=1):
                         st.subheader(f"Q{i}: {item['question']}")
-                        st.markdown(
-                            f"<div style='background-color: #2A2A2A; padding: 12px; border-left: 5px solid #FF8C00; margin-bottom: 12px; border-radius: 4px; border: 1px solid #444444;'>A{i}: {item['answer']}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("---")
+
+                        # Display the answer using the existing styled markdown
+                        answer_html = f"<div style='background-color: #2A2A2A; padding: 12px; border-left: 5px solid #FF8C00; margin-bottom: 8px; border-radius: 4px; border: 1px solid #444444;'>A{i}: {item['answer']}</div>"
+                        st.markdown(answer_html, unsafe_allow_html=True)
+
+                        # Add a copy button for this answer
+                        if st.button(f"📋 Copy Answer Q{i}", key=f"copy_q_{i}"):
+                            st.session_state.text_to_copy = item["answer"]
+                            st.session_state.copied_question_num = i
+                            st.session_state.show_copy_area = True
+                            st.experimental_rerun()  # Rerun to show the copy area
+
+                        st.markdown("---")  # Separator between Q/A items
                 else:
                     st.info("No questions were provided to generate answers for.")
             except Exception as e:
