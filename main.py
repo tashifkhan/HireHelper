@@ -4,9 +4,9 @@ from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-import io  # Added for BytesIO
-from PyPDF2 import PdfReader  # Added for PDF processing
-from docx import Document  # Added for DOCX processing
+import io
+from PyPDF2 import PdfReader
+from docx import Document
 
 
 def generate_answers(resume_text, role, company, questions_list, word_limit, api_key):
@@ -40,7 +40,7 @@ def generate_answers(resume_text, role, company, questions_list, word_limit, api
     chain = LLMChain(llm=llm, prompt=prompt)
 
     results = []
-    for q in questions_list:  # Iterate over the provided list
+    for q in questions_list:
         try:
             answer = chain.run(
                 resume=resume_text,
@@ -125,140 +125,524 @@ def main():
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
     st.set_page_config(
-        page_title="Interview Spark - AI Prep Assistant",
+        page_title="Hire Helper - AI Interview Prep",
+        page_icon="💼",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="auto",
+        menu_items={
+            "Get Help": "https://github.com/yourusername/hirehelper",
+            "Report a bug": "https://github.com/yourusername/hirehelper/issues",
+            "About": "# Hire Helper\nYour AI-powered interview preparation companion!",
+        },
     )
 
-    # Initialize session state for copy functionality
     if "text_to_copy" not in st.session_state:
         st.session_state.text_to_copy = ""
     if "show_copy_area" not in st.session_state:
         st.session_state.show_copy_area = False
     if "copied_question_num" not in st.session_state:
         st.session_state.copied_question_num = None
+    if "copy_success" not in st.session_state:
+        st.session_state.copy_success = {}
 
-    # Custom CSS for dark theme with deeper orange accents
     st.markdown(
         """ 
     <style>
-    /* Main app background */
+    /* Import modern fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;500;600;700&display=swap');
+    
+    /* CSS Variables for consistent theming */
+    :root {
+        --primary-color: #0891B2;
+        --primary-dark: #0E7490;
+        --primary-light: #22D3EE;
+        --secondary-color: #3B82F6;
+        --secondary-light: #60A5FA;
+        --accent-color: #06B6D4;
+        --background-dark: #0F172A;
+        --background-medium: #1E293B;
+        --background-light: #334155;
+        --background-card: #475569;
+        --text-primary: #F8FAFC;
+        --text-secondary: #CBD5E1;
+        --text-muted: #94A3B8;
+        --border-color: #64748B;
+        --shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        --shadow-hover: 0 8px 24px rgba(8, 145, 178, 0.2);
+        --border-radius: 12px;
+        --border-radius-small: 8px;
+        --gradient-primary: linear-gradient(135deg, #0891B2 0%, #22D3EE 50%, #3B82F6 100%);
+        --gradient-secondary: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%);
+        --gradient-bg: linear-gradient(135deg, #0F172A 0%, #1E293B 50%, #334155 100%);
+    }
+
+    /* Main app styling */
     .stApp {
-        background-color: #1A1A1A; /* Darker background */
-        color: #F0F0F0; /* Lighter text */
+        background: var(--gradient-bg);
+        color: var(--text-primary);
+        font-family: 'Comfortaa', -apple-system, BlinkMacSystemFont, sans-serif;
+        min-height: 100vh;
+    }
+
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .stApp {
+            padding-top: 1rem !important;
+        }
+        
+        /* Mobile-friendly sidebar */
+        .css-1d391kg {
+            width: 100% !important;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+        }
+        
+        .css-1d391kg.css-1aumxhk {
+            transform: translateX(0);
+        }
+        
+        /* Mobile title adjustments */
+        h1 {
+            font-size: 2rem !important;
+            text-align: center;
+            margin-bottom: 0.5rem !important;
+        }
+        
+        /* Mobile button adjustments */
+        .stButton > button {
+            width: 100% !important;
+            margin-bottom: 0.5rem !important;
+        }
+        
+        /* Mobile input adjustments */
+        .stTextInput input, .stTextArea textarea {
+            font-size: 16px !important; /* Prevents zoom on iOS */
+        }
     }
 
     /* Sidebar styling */
-    .css-1d391kg { /* Sidebar main */
-        background-color: #262626; /* Slightly lighter dark for sidebar */
-        border-right: 1px solid #FF8C00; /* Deeper orange sidebar border */
-    }
-    .css-1d391kg .st-emotion-cache-10oheav { /* Sidebar header */
-        color: #FF8C00; /* Deeper orange accent for sidebar headers */
-        border-bottom: 1px solid #444444;
-        padding-bottom: 0.5rem;
+    .css-1d391kg {
+        background: linear-gradient(180deg, var(--background-light) 0%, var(--background-medium) 100%);
+        border-right: 3px solid var(--primary-color);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
     }
 
-    /* Button styling */
-    .stButton>button {
-        background-color: #FF8C00; /* Fallback background color */
-        background-image: linear-gradient(to right, #FF8C00 0%, #FFA500 50%, #FF8C00 100%); /* Orange gradient */
-        color: #1A1A1A; /* Dark text for buttons */
-        border-radius: 6px;
-        border: 1px solid #E07B00; /* Slightly darker orange border */
-        font-weight: bold;
-    }
-    .stButton>button:hover {
-        background-color: #E07B00; /* Fallback background color */
-        background-image: linear-gradient(to right, #E07B00 0%, #FF8C00 50%, #E07B00 100%); /* Darker orange gradient on hover */
-        color: #FFFFFF;
-        border: 1px solid #FFAD33; /* Lighter orange border on hover for contrast */
+    .css-1d391kg .stMarkdown {
+        color: var(--text-secondary);
     }
 
-    /* Specific styling for Remove Question button */
+    /* Enhanced button styling */
+    .stButton > button {
+        background: var(--gradient-primary);
+        color: white;
+        border: none;
+        border-radius: var(--border-radius-small);
+        font-weight: 600;
+        font-family: 'Comfortaa', sans-serif;
+        padding: 0.875rem 1.75rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3);
+        text-transform: none;
+        letter-spacing: 0.025em;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stButton > button::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+        transition: left 0.5s;
+    }
+
+    .stButton > button:hover::before {
+        left: 100%;
+    }
+
+    .stButton > button:hover {
+        background: var(--gradient-secondary);
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-hover);
+    }
+
+    .stButton > button:active {
+        transform: translateY(0);
+    }
+
+    /* Secondary button styling (remove buttons) */
     div[data-testid="column"] button {
-        background-color: #4A4A4A !important; /* Darker grey for remove button */
-        color: #D0D0D0 !important; /* Lighter text */
-        border: 1px solid #333333 !important;
-        background-image: none !important; /* Remove gradient for this specific button */
-    }
-    div[data-testid="column"] button:hover {
-        background-color: #5A5A5A !important;
-        color: #FFFFFF !important;
-        border: 1px solid #FF8C00 !important;
+        background: linear-gradient(135deg, #64748B 0%, #475569 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        font-weight: 500 !important;
+        padding: 0.5rem !important;
+        transition: all 0.3s ease !important;
+        min-height: 2.5rem !important;
     }
 
-    /* Input fields styling */
+    div[data-testid="column"] button:hover {
+        background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3) !important;
+    }
+
+    /* Modern input styling */
     .stTextInput input, 
     .stTextArea textarea, 
     .stNumberInput input {
-        border: 2px solid #FF8C00 !important; /* Deeper orange, thicker border */
-        background-color: #2A2A2A !important; 
-        color: #F0F0F0 !important; 
-        border-radius: 6px !important; /* Slightly more rounded corners */
-        padding: 0.5em !important; /* Add some padding inside the input */
+        background-color: var(--background-card) !important;
+        border: 2px solid var(--border-color) !important;
+        border-radius: var(--border-radius-small) !important;
+        color: var(--text-primary) !important;
+        font-family: 'Comfortaa', sans-serif !important;
+        font-size: 14px !important;
+        padding: 0.875rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    }
+
+    .stTextInput input:focus, 
+    .stTextArea textarea:focus, 
+    .stNumberInput input:focus {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1), inset 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        outline: none !important;
+        background-color: var(--background-light) !important;
     }
 
     .stTextArea textarea {
-        resize: vertical; /* Allow vertical resize, disable horizontal if not desired */
+        min-height: 80px !important;
+        resize: vertical !important;
     }
 
-    .stFileUploader label { /* Specific styling for file uploader label */
-        border-radius: 6px;
-        padding: 8px;
-        border: 2px dashed #FF8C00 !important; /* Dashed border for drop zone, thicker */
-        background-color: #2A2A2A !important;
-    }
-    .stFileUploader label:hover {
-        border-color: #E07B00 !important;
-        background-color: #303030 !important;
-    }
-
-
-    /* Titles and Headers */
-    h1, h2, h3, h4, h5, h6 {
-        color: #FF8C00; /* Deeper orange for titles */
-    }
-    .st-emotion-cache-10trblm { /* Main title */
-        color: #FF8C00; /* Deeper orange for main title */
-        border-bottom: 2px solid #FF8C00;
-        padding-bottom: 0.3em;
-    }
-    .stMarkdown p { /* Main markdown text */
-        color: #D0D0D0; /* Lighter grey for paragraph text */
-    }
-    .stSuccess { /* Success box */
-        background-color: #1F3A24 !important; /* Darker green for success */
-        color: #A3D9A5 !important; /* Softer green text */
-        border: 1px solid #FF8C00 !important;
-        border-left: 5px solid #FF8C00 !important;
-        border-radius: 4px;
-    }
-    .stWarning { /* Warning box */
-        background-color: #4A3220 !important; /* Darker orange for warning */
-        color: #FFD79A !important; /* Softer gold text */
-        border: 1px solid #FF8C00 !important;
-        border-left: 5px solid #FF8C00 !important;
-        border-radius: 4px;
-    }
-    .stError { /* Error box */
-        background-color: #4C2525 !important; /* Darker red for error */
-        color: #FFA0A0 !important; /* Softer pink text */
-        border: 1px solid #FF8C00 !important;
-        border-left: 5px solid #FF8C00 !important;
-        border-radius: 4px;
-    }
-    .stInfo { /* Info box */
-      background-color: #20303F !important; /* Darker blue for info */
-      color: #A0C8E0 !important; /* Softer blue text */
-      border: 1px solid #FF8C00 !important;
-      border-left: 5px solid #FF8C00 !important;
-      border-radius: 4px;
+    /* File uploader styling */
+    .stFileUploader {
+        border: 2px dashed var(--border-color) !important;
+        border-radius: var(--border-radius) !important;
+        background: linear-gradient(135deg, var(--background-card) 0%, var(--background-light) 100%) !important;
+        padding: 2.5rem !important;
+        text-align: center !important;
+        transition: all 0.3s ease !important;
+        position: relative;
+        overflow: hidden;
     }
 
-    /* Horizontal rule */
+    .stFileUploader::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--gradient-primary);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
+    }
+
+    .stFileUploader:hover::before {
+        opacity: 0.05;
+    }
+
+    .stFileUploader:hover {
+        border-color: var(--primary-color) !important;
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-hover);
+    }
+
+    .stFileUploader label {
+        color: var(--text-secondary) !important;
+        font-weight: 500 !important;
+        cursor: pointer !important;
+        position: relative;
+        z-index: 1;
+    }
+
+    /* Typography improvements */
+    h1 {
+        color: transparent !important;
+        font-weight: 700 !important;
+        font-size: 2.75rem !important;
+        margin-bottom: 0.5rem !important;
+        text-align: center;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    h2, h3 {
+        color: var(--primary-color) !important;
+        font-weight: 600 !important;
+        margin-top: 2rem !important;
+        margin-bottom: 1rem !important;
+    }
+
+    .subtitle {
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 1.125rem;
+        margin-bottom: 2.5rem;
+        font-weight: 400;
+        line-height: 1.6;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    /* Alert and notification styling */
+    .stSuccess {
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        padding: 1.25rem !important;
+        box-shadow: var(--shadow) !important;
+        border-left: 4px solid #34D399 !important;
+    }
+
+    .stWarning {
+        background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        padding: 1.25rem !important;
+        box-shadow: var(--shadow) !important;
+        border-left: 4px solid #FBBF24 !important;
+    }
+
+    .stError {
+        background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        padding: 1.25rem !important;
+        box-shadow: var(--shadow) !important;
+        border-left: 4px solid #F87171 !important;
+    }
+
+    .stInfo {
+        background: var(--gradient-secondary) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        padding: 1.25rem !important;
+        box-shadow: var(--shadow) !important;
+        border-left: 4px solid var(--secondary-light) !important;
+    }
+
+    /* Spinner styling */
+    .stSpinner > div {
+        border-top-color: var(--primary-color) !important;
+        border-right-color: var(--primary-light) !important;
+    }
+
+    /* Card-like containers for answers */
+    .answer-card {
+        background: linear-gradient(135deg, var(--background-card) 0%, var(--background-light) 100%);
+        border: 1px solid var(--border-color);
+        border-left: 4px solid var(--primary-color);
+        border-radius: var(--border-radius);
+        padding: 2rem;
+        margin: 1.5rem 0;
+        box-shadow: var(--shadow);
+        transition: all 0.4s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .answer-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--gradient-primary);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
+    }
+
+    .answer-card:hover::before {
+        opacity: 0.02;
+    }
+
+    .answer-card:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-hover);
+        border-left-color: var(--accent-color);
+    }
+
+    .question-header {
+        color: var(--primary-color);
+        font-weight: 600;
+        font-size: 1.125rem;
+        margin-bottom: 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .answer-text {
+        color: var(--text-primary);
+        line-height: 1.7;
+        font-size: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    /* Horizontal dividers */
     hr {
-        border-top: 1px solid #FF8C00; /* Deeper orange horizontal rule */
+        border: none !important;
+        height: 2px !important;
+        background: var(--gradient-primary) !important;
+        margin: 3rem 0 !important;
+        border-radius: 1px;
+    }
+
+    /* Copy area styling */
+    .copy-area {
+        background: linear-gradient(135deg, var(--background-card) 0%, var(--background-light) 100%);
+        border: 2px solid var(--primary-color);
+        border-radius: var(--border-radius);
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+        box-shadow: var(--shadow);
+    }
+
+    .copy-area h4 {
+        color: var(--primary-color) !important;
+        margin-bottom: 0.75rem !important;
+        font-size: 1.125rem !important;
+    }
+
+    /* Mobile-specific improvements */
+    @media (max-width: 480px) {
+        .stApp {
+            padding: 0.75rem !important;
+        }
+        
+        h1 {
+            font-size: 2rem !important;
+        }
+        
+        .subtitle {
+            font-size: 1rem !important;
+            margin-bottom: 2rem !important;
+        }
+        
+        .answer-card {
+            padding: 1.25rem !important;
+            margin: 1rem 0 !important;
+        }
+        
+        .stButton > button {
+            padding: 0.75rem 1.25rem !important;
+            font-size: 0.9rem !important;
+        }
+    }
+
+    /* Accessibility improvements */
+    @media (prefers-reduced-motion: reduce) {
+        * {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+
+    /* Focus indicators for better accessibility */
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+        outline: 2px solid var(--primary-color) !important;
+        outline-offset: 2px !important;
+    }
+
+    /* Progress bar styling */
+    .stProgress > div > div {
+        background: var(--gradient-primary) !important;
+    }
+
+    /* Expander styling */
+    .streamlit-expander {
+        background: var(--background-card) !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: var(--border-radius-small) !important;
+    }
+
+    .streamlit-expander:hover {
+        border-color: var(--primary-color) !important;
+    }
+
+    /* Copy button specific styling */
+    .copy-button {
+        background: linear-gradient(135deg, #059669 0%, #10B981 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        font-weight: 500 !important;
+        padding: 0.75rem 1.5rem !important;
+        transition: all 0.3s ease !important;
+        min-width: 120px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.5rem !important;
+    }
+
+    .copy-button:hover {
+        background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3) !important;
+    }
+
+    .copy-button-copied {
+        background: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%) !important;
+        color: white !important;
+    }
+
+    /* Toast notification styling */
+    .copy-toast {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+        color: white;
+        padding: 1rem 1.5rem;
+        border-radius: var(--border-radius-small);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        z-index: 9999;
+        font-family: 'Comfortaa', sans-serif;
+        font-weight: 500;
+        animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
     }
 
     </style>
@@ -266,107 +650,197 @@ def main():
         unsafe_allow_html=True,
     )
 
-    st.title("Hire Helper: AI Prep Co-Pilot")
-    st.markdown("Ignite your success. Let's craft winning answers together.")
+    st.markdown("<h1>Hire Helper</h1>", unsafe_allow_html=True)
+    st.markdown(
+        '<p class="subtitle">Your AI-powered interview preparation companion. Upload your resume, add questions, and get personalized answers that showcase your professional experience.</p>',
+        unsafe_allow_html=True,
+    )
 
     if not GOOGLE_API_KEY:
         st.error(
-            "Please set the GOOGLE_API_KEY environment variable in your .env file."
+            "Please set the GOOGLE_API_KEY environment variable in your .env file to get started."
         )
         st.stop()
 
-    # --- Sidebar for Inputs ---
-    st.sidebar.header("Configure Your Session")
-    uploaded_resume = st.sidebar.file_uploader(
-        "Upload Your Resume (TXT, MD, PDF, DOCX)",
-        type=["txt", "md", "pdf", "docx"],
+    is_mobile = st.checkbox(
+        "Mobile view", value=False, help="Check this for better mobile experience"
     )
 
-    role = st.sidebar.text_input(
-        "Target Role:", placeholder="e.g., Senior Software Engineer"
-    )
-    company = st.sidebar.text_input(
-        "Target Company:", placeholder="e.g., Innovatech Solutions"
-    )
+    if is_mobile:
+        st.markdown("---")
 
-    st.sidebar.header("Interview Intel")
-
-    if "questions" not in st.session_state:
-        st.session_state.questions = [""]
-
-    def add_question_field():
-        st.session_state.questions.append("")
-
-    def remove_question_field(index):
-        if len(st.session_state.questions) > 1:
-            st.session_state.questions.pop(index)
-        else:
-            st.session_state.questions[index] = ""
-
-    for i, q_text in enumerate(st.session_state.questions):
-        cols = st.sidebar.columns([0.85, 0.15])
-        st.session_state.questions[i] = cols[0].text_input(
-            f"Question {i+1}",
-            value=q_text,
-            key=f"question_{i}",
-            label_visibility="collapsed",
-            placeholder=f"Enter question {i+1}",
-        )
-        if len(st.session_state.questions) > 1:
-            cols[1].button(
-                "-",
-                key=f"remove_q_{i}",
-                on_click=remove_question_field,
-                args=(i,),
-                use_container_width=True,
+        with st.expander("Configuration", expanded=True):
+            uploaded_resume = st.file_uploader(
+                "Upload Your Resume",
+                type=["txt", "md", "pdf", "docx"],
+                help="Supported formats: TXT, MD, PDF, DOCX",
             )
-        else:
-            cols[1].empty()
 
-    st.sidebar.button(
-        "Add Question", on_click=add_question_field, use_container_width=True
-    )
+            col1, col2 = st.columns(2)
+            with col1:
+                role = st.text_input(
+                    "Target Role", placeholder="e.g., Senior Software Engineer"
+                )
+            with col2:
+                company = st.text_input(
+                    "Target Company", placeholder="e.g., Innovatech Solutions"
+                )
 
-    word_limit = st.sidebar.number_input(
-        "Word limit per answer:", min_value=20, max_value=500, value=100, step=10
-    )
+        with st.expander("Interview Questions", expanded=True):
+            if "questions" not in st.session_state:
+                st.session_state.questions = [""]
 
-    if st.sidebar.button("Generate Answers", use_container_width=True):
+            def add_question_field():
+                st.session_state.questions.append("")
+
+            def remove_question_field(index):
+                if len(st.session_state.questions) > 1:
+                    st.session_state.questions.pop(index)
+                else:
+                    st.session_state.questions[index] = ""
+
+            for i, q_text in enumerate(st.session_state.questions):
+                cols = st.columns([0.85, 0.15])
+                st.session_state.questions[i] = cols[0].text_area(
+                    f"Question {i+1}",
+                    value=q_text,
+                    key=f"question_{i}",
+                    height=80,
+                    placeholder=f"Enter your interview question {i+1}...",
+                )
+                if len(st.session_state.questions) > 1:
+                    cols[1].button(
+                        "Remove",
+                        key=f"remove_q_{i}",
+                        on_click=remove_question_field,
+                        args=(i,),
+                        help="Remove this question",
+                    )
+
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.button(
+                    "Add Question",
+                    on_click=add_question_field,
+                    use_container_width=True,
+                )
+            with col2:
+                word_limit = st.number_input(
+                    "Word limit", min_value=20, max_value=500, value=100, step=10
+                )
+
+            generate_clicked = st.button(
+                "Generate Answers", use_container_width=True, type="primary"
+            )
+    else:
+
+        st.sidebar.markdown("### Configuration")
+        uploaded_resume = st.sidebar.file_uploader(
+            "Upload Your Resume",
+            type=["txt", "md", "pdf", "docx"],
+            help="Supported formats: TXT, MD, PDF, DOCX",
+        )
+
+        role = st.sidebar.text_input(
+            "Target Role", placeholder="e.g., Senior Software Engineer"
+        )
+        company = st.sidebar.text_input(
+            "Target Company", placeholder="e.g., Innovatech Solutions"
+        )
+
+        st.sidebar.markdown("### Interview Questions")
+
+        if "questions" not in st.session_state:
+            st.session_state.questions = [""]
+
+        def add_question_field():
+            st.session_state.questions.append("")
+
+        def remove_question_field(index):
+            if len(st.session_state.questions) > 1:
+                st.session_state.questions.pop(index)
+            else:
+                st.session_state.questions[index] = ""
+
+        for i, q_text in enumerate(st.session_state.questions):
+            cols = st.sidebar.columns([0.85, 0.15])
+            st.session_state.questions[i] = cols[0].text_area(
+                f"Question {i+1}",
+                value=q_text,
+                key=f"question_{i}",
+                height=80,
+                placeholder=f"Enter your interview question {i+1}...",
+            )
+            if len(st.session_state.questions) > 1:
+                cols[1].button(
+                    "×",
+                    key=f"remove_q_{i}",
+                    on_click=remove_question_field,
+                    args=(i,),
+                    help="Remove this question",
+                )
+
+        st.sidebar.button(
+            "Add Question", on_click=add_question_field, use_container_width=True
+        )
+
+        word_limit = st.sidebar.number_input(
+            "Word limit per answer",
+            min_value=20,
+            max_value=500,
+            value=100,
+            step=10,
+            help="Maximum words per generated answer",
+        )
+
+        generate_clicked = st.sidebar.button(
+            "Generate Answers", use_container_width=True, type="primary"
+        )
+
+    if generate_clicked:
         if not uploaded_resume:
             st.warning("Please upload your resume to proceed.")
-        elif not role:
+        elif not role.strip():
             st.warning("Please specify the target role.")
-        elif not company:
+        elif not company.strip():
             st.warning("Please specify the target company.")
         elif not any(q.strip() for q in st.session_state.questions):
             st.warning("Please enter at least one interview question.")
         else:
+            # Show progress
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
             try:
+
+                status_text.text("Processing your resume...")
+                progress_bar.progress(20)
+
                 resume_bytes = uploaded_resume.read()
                 raw_resume_text = process_document(resume_bytes, uploaded_resume.name)
 
                 if not raw_resume_text:
                     st.stop()
 
+                progress_bar.progress(40)
                 resume_text = raw_resume_text
                 file_extension = os.path.splitext(uploaded_resume.name)[1].lower()
 
                 if file_extension in [".pdf", ".docx"]:
                     if raw_resume_text.strip():
-                        with st.spinner(
-                            "AI is formatting your resume... Please wait..."
-                        ):
-                            resume_text = format_resume_text_with_llm(
-                                raw_resume_text, GOOGLE_API_KEY
-                            )
+                        status_text.text("AI is formatting your resume...")
+                        progress_bar.progress(60)
+                        resume_text = format_resume_text_with_llm(
+                            raw_resume_text, GOOGLE_API_KEY
+                        )
                         if not resume_text.strip():
                             st.warning(
-                                "Formatting resulted in empty resume text, using raw extracted text."
+                                "⚠️ Formatting resulted in empty resume text, using raw extracted text."
                             )
                             resume_text = raw_resume_text
                     else:
                         st.warning(
-                            f"No text could be extracted from {uploaded_resume.name}."
+                            f"⚠️ No text could be extracted from {uploaded_resume.name}."
                         )
                         st.stop()
 
@@ -376,67 +850,107 @@ def main():
                     )
                     st.stop()
 
+                status_text.text("✨ AI is crafting your personalized answers...")
+                progress_bar.progress(80)
+
                 valid_questions = [
                     q.strip() for q in st.session_state.questions if q.strip()
                 ]
                 if not valid_questions:
-                    st.warning("Please ensure at least one question is filled out.")
+                    st.warning("❓ Please ensure at least one question is filled out.")
                     st.stop()
 
-                with st.spinner("AI is crafting your answers... Please wait..."):
-                    answers = generate_answers(
-                        resume_text,
-                        role,
-                        company,
-                        valid_questions,
-                        word_limit,
-                        GOOGLE_API_KEY,
-                    )
+                answers = generate_answers(
+                    resume_text,
+                    role,
+                    company,
+                    valid_questions,
+                    word_limit,
+                    GOOGLE_API_KEY,
+                )
+
+                progress_bar.progress(100)
+                status_text.text("Complete!")
+
+                progress_bar.empty()
+                status_text.empty()
 
                 if answers:
-                    st.success("Answers generated successfully:")
-
-                    # Display area for copying if activated
-                    if (
-                        st.session_state.show_copy_area
-                        and st.session_state.text_to_copy
-                    ):
-                        st.info(
-                            f"📋 Answer for Q{st.session_state.copied_question_num} is ready to copy from the text area below:"
-                        )
-                        st.text_area(
-                            "",
-                            st.session_state.text_to_copy,
-                            height=150,
-                            key="copy_area_field",
-                            label_visibility="collapsed",
-                        )
-                        if st.button("Hide Copy Area", key="done_copying_btn"):
-                            st.session_state.show_copy_area = False
-                            st.session_state.text_to_copy = ""
-                            st.session_state.copied_question_num = None
-                            st.experimental_rerun()
-                        st.markdown("---")  # Separator after copy area
+                    st.success("Your personalized interview answers are ready!")
 
                     for i, item in enumerate(answers, start=1):
-                        st.subheader(f"Q{i}: {item['question']}")
 
-                        # Display the answer using the existing styled markdown
-                        answer_html = f"<div style='background-color: #2A2A2A; padding: 12px; border-left: 5px solid #FF8C00; margin-bottom: 8px; border-radius: 4px; border: 1px solid #444444;'>A{i}: {item['answer']}</div>"
-                        st.markdown(answer_html, unsafe_allow_html=True)
+                        st.markdown(
+                            f"""<div class="answer-card">
+                                <div class="question-header">
+                                    <span>Question {i}</span>
+                                </div>
+                                <div style="color: var(--text-secondary); margin-bottom: 1rem; font-style: italic;">
+                                    "{item['question']}"
+                                </div>
+                                <div class="answer-text">
+                                    <strong>Your Answer:</strong><br>
+                                    {item['answer']}
+                                </div>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
 
-                        # Add a copy button for this answer
-                        if st.button(f"📋 Copy Answer Q{i}", key=f"copy_q_{i}"):
-                            st.session_state.text_to_copy = item["answer"]
-                            st.session_state.copied_question_num = i
-                            st.session_state.show_copy_area = True
-                            st.experimental_rerun()  # Rerun to show the copy area
+                        col1, col2, col3 = st.columns([3, 3, 2])
 
-                        st.markdown("---")  # Separator between Q/A items
+                        with col1:
+                            if st.button(
+                                f"📋 Show Copy Area Q{i}",
+                                key=f"copy_q_{i}",
+                                help="Click to show text area for copying",
+                            ):
+                                # Toggle the copy area for this specific question
+                                copy_area_key = f"show_copy_area_{i}"
+                                if copy_area_key not in st.session_state:
+                                    st.session_state[copy_area_key] = False
+                                st.session_state[copy_area_key] = not st.session_state[
+                                    copy_area_key
+                                ]
+                                st.rerun()
+
+                        copy_area_key = f"show_copy_area_{i}"
+                        if (
+                            copy_area_key in st.session_state
+                            and st.session_state[copy_area_key]
+                        ):
+                            st.markdown("---")
+                            st.markdown(f"**📋 Copy Text for Question {i}:**")
+                            st.info(
+                                "💡 **Instructions:** Click in the text area below → Press Ctrl+A (Select All) → Press Ctrl+C (Copy)"
+                            )
+
+                            st.text_area(
+                                f"Question {i} Answer (Ready to Copy):",
+                                value=item["answer"],
+                                height=150,
+                                key=f"copy_text_area_{i}",
+                                help="Click here, select all text (Ctrl+A), then copy (Ctrl+C)",
+                                disabled=False,
+                            )
+
+                            col_close1, col_close2, col_close3 = st.columns([1, 2, 3])
+                            with col_close1:
+                                if st.button(f"❌ Hide", key=f"hide_copy_{i}"):
+                                    st.session_state[copy_area_key] = False
+                                    st.rerun()
+                            with col_close2:
+                                st.markdown("*Click Hide when done copying*")
+
+                        st.markdown("---")
                 else:
-                    st.info("No questions were provided to generate answers for.")
+                    st.info("ℹ️ No questions were provided to generate answers for.")
+
             except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
                 st.error(f"An error occurred during answer generation: {e}")
+                st.error("Please try again or check your inputs.")
 
 
-main()
+if __name__ == "__main__":
+    main()
