@@ -4,6 +4,9 @@ from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
+import io  # Added for BytesIO
+from PyPDF2 import PdfReader  # Added for PDF processing
+from docx import Document  # Added for DOCX processing
 
 
 def generate_answers(resume_text, role, company, questions_list, word_limit, api_key):
@@ -50,6 +53,69 @@ def generate_answers(resume_text, role, company, questions_list, word_limit, api
         except Exception as e:
             results.append({"question": q, "answer": f"Error generating answer: {e}"})
     return results
+
+
+def process_document(file_bytes, file_name):
+    """Extracts text from uploaded TXT, MD, PDF, or DOCX file."""
+    file_extension = os.path.splitext(file_name)[1].lower()
+    raw_text = ""
+    try:
+        if file_extension == ".txt" or file_extension == ".md":
+            raw_text = file_bytes.decode()
+        elif file_extension == ".pdf":
+            pdf_reader = PdfReader(io.BytesIO(file_bytes))
+            for page in pdf_reader.pages:
+                raw_text += page.extract_text() or ""
+        elif file_extension == ".docx":
+            doc = Document(io.BytesIO(file_bytes))
+            for para in doc.paragraphs:
+                raw_text += para.text + "\\n"
+        else:
+            st.error(
+                f"Unsupported file type: {file_extension}. Please upload TXT, MD, PDF, or DOCX."
+            )
+            return None
+    except Exception as e:
+        st.error(f"Error processing file {file_name}: {e}")
+        return None
+    return raw_text
+
+
+def format_resume_text_with_llm(raw_text, api_key):
+    """Formats the extracted resume text using an LLM."""
+    if not raw_text.strip():
+        return ""
+    try:
+        llm = GoogleGenerativeAI(
+            model="gemini-2.0-flash",  # Using gemini-2.0-flash as a light model
+            temperature=0.1,  # Low temperature for more deterministic formatting
+            api_key=api_key,
+        )
+        template = """
+        You are a text processing assistant.
+        The following text was extracted from a resume file and might contain formatting errors,
+        unnecessary characters, or be poorly structured.
+        Please clean and reformat this text to be a clear, well-structured resume.
+        Ensure that all key information (experience, education, skills, etc.) is preserved and presented logically.
+        Remove any artifacts from the text extraction process. The output should be only the cleaned resume text.
+        ---
+        Raw Resume Text:
+        ```
+        {raw_resume_text}
+        ```
+        ---
+        Cleaned and Formatted Resume Text:
+        """
+        prompt = PromptTemplate(
+            input_variables=["raw_resume_text"],
+            template=template,
+        )
+        chain = LLMChain(llm=llm, prompt=prompt)
+        formatted_text = chain.run(raw_resume_text=raw_text)
+        return formatted_text.strip()
+    except Exception as e:
+        st.error(f"Error formatting resume text with LLM: {e}")
+        return raw_text  # Fallback to raw text if formatting fails
 
 
 def main():
@@ -202,7 +268,8 @@ def main():
     # --- Sidebar for Inputs ---
     st.sidebar.header("Configure Your Session")
     uploaded_resume = st.sidebar.file_uploader(
-        "Upload Your Resume (TXT or MD)", type=["txt", "md"]
+        "Upload Your Resume (TXT, MD, PDF, DOCX)",
+        type=["txt", "md", "pdf", "docx"],
     )
 
     role = st.sidebar.text_input(
@@ -224,7 +291,7 @@ def main():
         if len(st.session_state.questions) > 1:
             st.session_state.questions.pop(index)
         else:
-            st.session_state.questions[index] = ""  # Clear if only one question
+            st.session_state.questions[index] = ""
 
     for i, q_text in enumerate(st.session_state.questions):
         cols = st.sidebar.columns([0.85, 0.15])
@@ -244,7 +311,7 @@ def main():
                 use_container_width=True,
             )
         else:
-            cols[1].empty()  # Keep layout consistent
+            cols[1].empty()
 
     st.sidebar.button(
         "Add Question", on_click=add_question_field, use_container_width=True
@@ -266,9 +333,39 @@ def main():
         else:
             try:
                 resume_bytes = uploaded_resume.read()
-                resume_text = resume_bytes.decode()
+                raw_resume_text = process_document(resume_bytes, uploaded_resume.name)
 
-                # Filter out empty questions before passing to generate_answers
+                if not raw_resume_text:
+                    st.stop()
+
+                resume_text = raw_resume_text
+                file_extension = os.path.splitext(uploaded_resume.name)[1].lower()
+
+                if file_extension in [".pdf", ".docx"]:
+                    if raw_resume_text.strip():
+                        with st.spinner(
+                            "AI is formatting your resume... Please wait..."
+                        ):
+                            resume_text = format_resume_text_with_llm(
+                                raw_resume_text, GOOGLE_API_KEY
+                            )
+                        if not resume_text.strip():
+                            st.warning(
+                                "Formatting resulted in empty resume text, using raw extracted text."
+                            )
+                            resume_text = raw_resume_text
+                    else:
+                        st.warning(
+                            f"No text could be extracted from {uploaded_resume.name}."
+                        )
+                        st.stop()
+
+                if not resume_text.strip():
+                    st.error(
+                        "After processing, the resume text is empty. Cannot proceed."
+                    )
+                    st.stop()
+
                 valid_questions = [
                     q.strip() for q in st.session_state.questions if q.strip()
                 ]
