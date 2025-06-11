@@ -9,7 +9,16 @@ from PyPDF2 import PdfReader
 from docx import Document
 
 
-def generate_answers(resume_text, role, company, questions_list, word_limit, api_key):
+def generate_answers(
+    resume_text,
+    role,
+    company,
+    questions_list,
+    word_limit,
+    api_key,
+    user_company_knowledge="",
+    company_research="",
+):
     """Generates answers to interview questions based on the resume and inputs."""
     if not questions_list:
         return []
@@ -20,21 +29,39 @@ def generate_answers(resume_text, role, company, questions_list, word_limit, api
         api_key=api_key,
     )
 
+    # Build context about the company
+    company_context = ""
+    if user_company_knowledge.strip():
+        company_context += f"\n\nAdditional information about {company}:\n{user_company_knowledge.strip()}"
+    if company_research.strip():
+        company_context += (
+            f"\n\nResearch findings about {company}:\n{company_research.strip()}"
+        )
+
     template = """
     You are an expert interview coach.
     A candidate with this résumé:
     ```
     {resume}
     ```
-    is applying for the role of {role} at {company}.
+    is applying for the role of {role} at {company}.{company_context}
+    
     Answer the question below in at most {word_limit} words,
-    drawing on experiences and skills from the résumé.
+    drawing on experiences and skills from the résumé. If relevant company information is available,
+    tailor your answer to show how the candidate's experience aligns with the company's needs and culture.
     ---
     Question: {question}
     """
 
     prompt = PromptTemplate(
-        input_variables=["resume", "role", "company", "question", "word_limit"],
+        input_variables=[
+            "resume",
+            "role",
+            "company",
+            "company_context",
+            "question",
+            "word_limit",
+        ],
         template=template,
     )
     chain = LLMChain(llm=llm, prompt=prompt)
@@ -46,6 +73,7 @@ def generate_answers(resume_text, role, company, questions_list, word_limit, api
                 resume=resume_text,
                 role=role,
                 company=company,
+                company_context=company_context,
                 question=q,
                 word_limit=word_limit,
             )
@@ -120,6 +148,21 @@ def format_resume_text_with_llm(raw_text, api_key):
         return raw_text
 
 
+def get_company_research(company_name: str, api_key: str) -> str:
+    """
+    Placeholder for company research agent.
+    Currently, this function returns a placeholder message.
+    A more advanced implementation would use web scraping tools or APIs
+    to find and summarize information about the specified company.
+    """
+
+    return (
+        f"Automated company research for '{company_name}' is a feature in development. "
+        "This space would contain information gathered by the research agent. "
+        "For now, please rely on the 'What else do you know about the company?' field for specific company insights."
+    )
+
+
 def main():
     load_dotenv()
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -130,11 +173,14 @@ def main():
         layout="wide",
         initial_sidebar_state="auto",
         menu_items={
-            "Get Help": "https://github.com/yourusername/hirehelper",
-            "Report a bug": "https://github.com/yourusername/hirehelper/issues",
+            "Get Help": "https://github.com/tashifkhan/hirehelper",
+            "Report a bug": "https://github.com/tashifkhan/hirehelper/issues",
             "About": "# Hire Helper\nYour AI-powered interview preparation companion!",
         },
     )
+
+    if "file_uploader_key" not in st.session_state:
+        st.session_state.file_uploader_key = 0
 
     if "text_to_copy" not in st.session_state:
         st.session_state.text_to_copy = ""
@@ -182,6 +228,38 @@ def main():
         color: var(--text-primary);
         font-family: 'Comfortaa', -apple-system, BlinkMacSystemFont, sans-serif;
         min-height: 100vh;
+        padding: 0 !important;
+    }
+
+    /* Main content container */
+    .main .block-container {
+        padding: 2rem 1rem !important;
+        max-width: 1200px !important;
+        margin: 0 auto !important;
+        width: 100% !important;
+    }
+
+    /* Center all main content */
+    .main {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        width: 100% !important;
+    }
+
+    /* Ensure proper spacing for content */
+    .element-container {
+        width: 100% !important;
+        max-width: 1200px !important;
+        margin: 0 auto !important;
+    }
+
+    /* Center the title and subtitle */
+    .element-container h1,
+    .element-container .subtitle {
+        text-align: center !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
     }
 
     /* Hide Streamlit branding */
@@ -193,6 +271,10 @@ def main():
     @media (max-width: 768px) {
         .stApp {
             padding-top: 1rem !important;
+        }
+        
+        .main .block-container {
+            padding: 1rem 0.5rem !important;
         }
         
         /* Mobile-friendly sidebar */
@@ -231,10 +313,35 @@ def main():
         border-right: 3px solid var(--primary-color);
         box-shadow: var(--shadow);
         backdrop-filter: blur(10px);
+        padding: 1.5rem 1rem !important;
     }
 
     .css-1d391kg .stMarkdown {
         color: var(--text-secondary);
+    }
+
+    /* Sidebar section headers */
+    .css-1d391kg .stMarkdown h3 {
+        color: var(--primary-color) !important;
+        font-weight: 600 !important;
+        margin-top: 0 !important;
+        margin-bottom: 1.5rem !important;
+        padding-bottom: 0.5rem !important;
+        border-bottom: 2px solid var(--primary-color) !important;
+        font-size: 1.25rem !important;
+    }
+
+    /* Sidebar form elements spacing */
+    .css-1d391kg .stTextInput,
+    .css-1d391kg .stTextArea,
+    .css-1d391kg .stNumberInput,
+    .css-1d391kg .stFileUploader {
+        margin-bottom: 1.5rem !important;
+    }
+
+    /* Sidebar button styling */
+    .css-1d391kg .stButton {
+        margin-bottom: 1rem !important;
     }
 
     /* Enhanced button styling */
@@ -367,6 +474,110 @@ def main():
         cursor: pointer !important;
         position: relative;
         z-index: 1;
+        display: block !important;
+        width: 100% !important;
+        text-align: center !important;
+    }
+
+    /* File uploader content wrapper */
+    .stFileUploader > div {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100% !important;
+    }
+
+    /* File uploader section layout improvements */
+    .stFileUploader section {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 1.5rem !important;
+        width: 100% !important;
+    }
+
+    .stFileUploader section > div {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 1rem !important;
+        width: 100% !important;
+        text-align: center !important;
+    }
+
+    /* File uploader text styling */
+    .stFileUploader section p,
+    .stFileUploader section span,
+    .stFileUploader section small {
+        text-align: center !important;
+        display: block !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+    }
+
+    /* Browse files button styling */
+    .stFileUploader button {
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
+        font-weight: 600 !important;
+        font-family: 'Comfortaa', sans-serif !important;
+        padding: 0.875rem 1.75rem !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3) !important;
+        text-transform: none !important;
+        letter-spacing: 0.025em !important;
+        margin: 1rem auto 0 auto !important;
+        position: relative !important;
+        overflow: hidden !important;
+        display: block !important;
+        width: auto !important;
+        min-width: 150px !important;
+    }
+
+    .stFileUploader button:hover {
+        background: var(--gradient-secondary) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: var(--shadow-hover) !important;
+    }
+
+    .stFileUploader button:active {
+        transform: translateY(0) !important;
+    }
+
+    /* Hide ALL file uploader close/remove buttons - aggressive approach */
+    .stFileUploader button[kind="secondary"],
+    .stFileUploader button[data-testid="stButton"],
+    .stFileUploader .stButton,
+    .stFileUploader button:not([type="file"]):not(.stDownloadButton),
+    .stFileUploader section button[title*="Remove"],
+    .stFileUploader section button[title*="remove"],
+    .stFileUploader section button[title*="Delete"],
+    .stFileUploader section button[title*="delete"],
+    .stFileUploader section button[title*="Clear"],
+    .stFileUploader section button[title*="clear"],
+    .stFileUploader section small + button,
+    .stFileUploader div[data-testid="stFileUploaderDeleteBtn"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }
+
+    /* Hide any button that's not the main browse button */
+    .stFileUploader section > div > button:not([type="button"]) {
+        display: none !important;
+    }
+
+    /* Make sure only the browse files button is visible */
+    .stFileUploader button[type="button"] {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
     }
 
     /* Typography improvements */
@@ -387,7 +598,23 @@ def main():
         color: var(--primary-color) !important;
         font-weight: 600 !important;
         margin-top: 2rem !important;
-        margin-bottom: 1rem !important;
+        margin-bottom: 1.5rem !important;
+        font-size: 1.5rem !important;
+        line-height: 1.2 !important;
+    }
+
+    /* Special styling for sidebar headings */
+    .css-1d391kg h3 {
+        margin-top: 0 !important;
+        margin-bottom: 1.5rem !important;
+        font-size: 1.25rem !important;
+    }
+
+    /* Section headers in main content */
+    .element-container h2,
+    .element-container h3 {
+        text-align: left !important;
+        padding-left: 0 !important;
     }
 
     .subtitle {
@@ -575,6 +802,74 @@ def main():
         outline-offset: 2px !important;
     }
 
+    /* Column alignment improvements */
+    div[data-testid="column"] {
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: flex-start !important;
+        align-items: stretch !important;
+        gap: 0.5rem !important;
+    }
+
+    /* Question input sections */
+    .css-1d391kg div[data-testid="column"] {
+        gap: 0.75rem !important;
+    }
+
+    /* Question text areas specific styling */
+    .css-1d391kg .stTextArea {
+        margin-bottom: 1rem !important;
+    }
+
+    .css-1d391kg .stTextArea label {
+        font-weight: 600 !important;
+        color: var(--text-primary) !important;
+        margin-bottom: 0.5rem !important;
+        font-size: 0.95rem !important;
+    }
+
+    /* Question remove button alignment */
+    .css-1d391kg div[data-testid="column"]:last-child {
+        justify-content: flex-end !important;
+        padding-top: 1.5rem !important;
+    }
+
+    /* Form field container alignment */
+    .stTextInput,
+    .stTextArea,
+    .stNumberInput,
+    .stSelectbox {
+        margin-bottom: 1rem !important;
+    }
+
+    /* Ensure labels are properly aligned */
+    .stTextInput label,
+    .stTextArea label,
+    .stNumberInput label,
+    .stSelectbox label {
+        font-weight: 500 !important;
+        color: var(--text-secondary) !important;
+        margin-bottom: 0.5rem !important;
+        display: block !important;
+    }
+
+    /* Better button alignment in columns */
+    div[data-testid="column"] .stButton {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        margin-top: auto !important;
+    }
+
+    /* Remove button specific alignment */
+    div[data-testid="column"] .stButton button {
+        width: 100% !important;
+        height: fit-content !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+
     /* Progress bar styling */
     .stProgress > div > div {
         background: var(--gradient-primary) !important;
@@ -585,10 +880,53 @@ def main():
         background: var(--background-card) !important;
         border: 1px solid var(--border-color) !important;
         border-radius: var(--border-radius-small) !important;
+        margin-bottom: 1.5rem !important;
     }
 
     .streamlit-expander:hover {
         border-color: var(--primary-color) !important;
+    }
+
+    /* Expander content alignment */
+    .streamlit-expander .streamlit-expanderContent {
+        padding: 1.5rem !important;
+    }
+
+    /* Expander header styling */
+    .streamlit-expander .streamlit-expanderHeader {
+        padding: 1rem 1.5rem !important;
+        font-weight: 600 !important;
+        font-size: 1.1rem !important;
+        color: var(--primary-color) !important;
+        background: linear-gradient(135deg, var(--background-light) 0%, var(--background-card) 100%) !important;
+        border-radius: var(--border-radius-small) var(--border-radius-small) 0 0 !important;
+    }
+
+    /* Better spacing within expanders */
+    .streamlit-expanderContent .element-container {
+        margin-bottom: 1rem !important;
+    }
+
+    /* Container spacing improvements */
+    .element-container {
+        margin-bottom: 1rem !important;
+    }
+
+    /* Better spacing for form sections */
+    .stForm {
+        border: none !important;
+        padding: 0 !important;
+    }
+
+    /* Checkbox alignment */
+    .stCheckbox {
+        margin-bottom: 1.5rem !important;
+    }
+
+    .stCheckbox label {
+        display: flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
     }
 
     /* Copy button specific styling */
@@ -674,17 +1012,37 @@ def main():
                 "Upload Your Resume",
                 type=["txt", "md", "pdf", "docx"],
                 help="Supported formats: TXT, MD, PDF, DOCX",
+                key=f"mobile_uploader_{st.session_state.file_uploader_key}",
             )
 
-            col1, col2 = st.columns(2)
-            with col1:
-                role = st.text_input(
-                    "Target Role", placeholder="e.g., Senior Software Engineer"
-                )
+            # Add clear resume button for mobile
+            if uploaded_resume:
+                st.info(f"📄 **Uploaded:** {uploaded_resume.name}")
+                if st.button(
+                    "🗑️ Clear Resume",
+                    key="clear_resume_mobile",
+                    help="Remove the uploaded resume file",
+                ):
+                    # Clear the file uploader by incrementing the key
+                    st.session_state.file_uploader_key += 1
+                    st.rerun()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            role = st.text_input(
+                "Target Role", placeholder="e.g., Senior Software Engineer"
+            )
             with col2:
                 company = st.text_input(
                     "Target Company", placeholder="e.g., Innovatech Solutions"
                 )
+
+            user_additional_company_info_mobile = st.text_area(
+                "What else do you know about the company?",
+                placeholder="e.g., Their recent projects, company culture, specific challenges...",
+                height=100,
+                key="user_info_mobile",
+            )
 
         with st.expander("Interview Questions", expanded=True):
             if "questions" not in st.session_state:
@@ -739,13 +1097,32 @@ def main():
             "Upload Your Resume",
             type=["txt", "md", "pdf", "docx"],
             help="Supported formats: TXT, MD, PDF, DOCX",
+            key=f"desktop_uploader_{st.session_state.file_uploader_key}",
         )
+
+        # Add clear resume button for desktop
+        if uploaded_resume:
+            st.sidebar.info(f"📄 **Uploaded:** {uploaded_resume.name}")
+            if st.sidebar.button(
+                "🗑️ Clear Resume",
+                key="clear_resume_desktop",
+                help="Remove the uploaded resume file",
+            ):
+                # Clear the file uploader by incrementing the key
+                st.session_state.file_uploader_key += 1
+                st.rerun()
 
         role = st.sidebar.text_input(
             "Target Role", placeholder="e.g., Senior Software Engineer"
         )
         company = st.sidebar.text_input(
             "Target Company", placeholder="e.g., Innovatech Solutions"
+        )
+        user_additional_company_info_desktop = st.sidebar.text_area(
+            "What else do you know about the company?",
+            placeholder="e.g., Their recent projects, company culture, specific challenges...",
+            height=100,
+            key="user_info_desktop",
         )
 
         st.sidebar.markdown("### Interview Questions")
@@ -797,6 +1174,11 @@ def main():
             "Generate Answers", use_container_width=True, type="primary"
         )
 
+    if is_mobile:
+        user_additional_company_info = user_additional_company_info_mobile
+    else:
+        user_additional_company_info = user_additional_company_info_desktop
+
     if generate_clicked:
         if not uploaded_resume:
             st.warning("Please upload your resume to proceed.")
@@ -807,7 +1189,7 @@ def main():
         elif not any(q.strip() for q in st.session_state.questions):
             st.warning("Please enter at least one interview question.")
         else:
-            # Show progress
+
             progress_bar = st.progress(0)
             status_text = st.empty()
 
@@ -850,8 +1232,22 @@ def main():
                     )
                     st.stop()
 
+                status_text.text(f"Researching {company}...")
+                progress_bar.progress(70)
+                company_research_data = ""
+                if company.strip():
+                    company_research_data = get_company_research(
+                        company, GOOGLE_API_KEY
+                    )
+
+                if company_research_data and company.strip():
+                    with st.expander(
+                        f"Initial Research Findings for {company}", expanded=False
+                    ):
+                        st.markdown(company_research_data)
+
                 status_text.text("✨ AI is crafting your personalized answers...")
-                progress_bar.progress(80)
+                progress_bar.progress(90)
 
                 valid_questions = [
                     q.strip() for q in st.session_state.questions if q.strip()
@@ -867,6 +1263,8 @@ def main():
                     valid_questions,
                     word_limit,
                     GOOGLE_API_KEY,
+                    user_additional_company_info,
+                    company_research_data,
                 )
 
                 progress_bar.progress(100)
@@ -904,7 +1302,6 @@ def main():
                                 key=f"copy_q_{i}",
                                 help="Click to show text area for copying",
                             ):
-                                # Toggle the copy area for this specific question
                                 copy_area_key = f"show_copy_area_{i}"
                                 if copy_area_key not in st.session_state:
                                     st.session_state[copy_area_key] = False
