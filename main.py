@@ -7,6 +7,8 @@ from langchain.chains import LLMChain
 import io
 from PyPDF2 import PdfReader
 from docx import Document
+import json
+from streamlit.components.v1 import html
 
 
 def generate_answers(
@@ -175,21 +177,15 @@ def main():
         menu_items={
             "Get Help": "https://github.com/tashifkhan/hirehelper",
             "Report a bug": "https://github.com/tashifkhan/hirehelper/issues",
-            "About": "# Hire Helper\nYour AI-powered interview preparation companion!",
+            "About": "# Hire Helper\\nYour AI-powered interview preparation companion!",
         },
     )
 
     if "file_uploader_key" not in st.session_state:
         st.session_state.file_uploader_key = 0
 
-    if "text_to_copy" not in st.session_state:
-        st.session_state.text_to_copy = ""
-    if "show_copy_area" not in st.session_state:
-        st.session_state.show_copy_area = False
-    if "copied_question_num" not in st.session_state:
-        st.session_state.copied_question_num = None
-    if "copy_success" not in st.session_state:
-        st.session_state.copy_success = {}
+    if "questions" not in st.session_state:
+        st.session_state.questions = [""]
 
     st.markdown(
         """ 
@@ -943,6 +939,7 @@ def main():
         align-items: center !important;
         justify-content: center !important;
         gap: 0.5rem !important;
+        cursor: pointer;
     }
 
     .copy-button:hover {
@@ -1032,17 +1029,17 @@ def main():
             role = st.text_input(
                 "Target Role", placeholder="e.g., Senior Software Engineer"
             )
-            with col2:
-                company = st.text_input(
-                    "Target Company", placeholder="e.g., Innovatech Solutions"
-                )
-
-            user_additional_company_info_mobile = st.text_area(
-                "What else do you know about the company?",
-                placeholder="e.g., Their recent projects, company culture, specific challenges...",
-                height=100,
-                key="user_info_mobile",
+        with col2:
+            company = st.text_input(
+                "Target Company", placeholder="e.g., Innovatech Solutions"
             )
+
+        user_additional_company_info_mobile = st.text_area(
+            "What else do you know about the company?",
+            placeholder="e.g., Their recent projects, company culture, specific challenges...",
+            height=100,
+            key="user_info_mobile",
+        )
 
         with st.expander("Interview Questions", expanded=True):
             if "questions" not in st.session_state:
@@ -1242,7 +1239,8 @@ def main():
 
                 if company_research_data and company.strip():
                     with st.expander(
-                        f"Initial Research Findings for {company}", expanded=False
+                        f"Initial Research Findings for {company}",
+                        expanded=False,
                     ):
                         st.markdown(company_research_data)
 
@@ -1276,7 +1274,74 @@ def main():
                 if answers:
                     st.success("Your personalized interview answers are ready!")
 
+                    # --- MODIFICATION START ---
+                    # JavaScript for clipboard functionality with a fallback for non-secure contexts (like HTTP)
+                    copy_js = """
+                    function copyToClipboard(textToCopy, buttonId) {
+                        const fallbackCopy = (text) => {
+                            const textArea = document.createElement("textarea");
+                            textArea.value = text;
+                            
+                            // Avoid scrolling to bottom
+                            textArea.style.top = "0";
+                            textArea.style.left = "0";
+                            textArea.style.position = "fixed";
+
+                            document.body.appendChild(textArea);
+                            textArea.focus();
+                            textArea.select();
+
+                            let success = false;
+                            try {
+                                success = document.execCommand('copy');
+                            } catch (err) {
+                                console.error('Fallback: Oops, unable to copy', err);
+                            }
+
+                            document.body.removeChild(textArea);
+                            return Promise.resolve(success);
+                        };
+
+                        const button = document.getElementById(buttonId);
+                        if (!button) return;
+                        const originalText = button.innerText;
+
+                        if (!navigator.clipboard) {
+                            fallbackCopy(textToCopy).then((success) => {
+                                if (success) {
+                                    button.innerText = 'Copied!';
+                                    setTimeout(() => { button.innerText = originalText; }, 2000);
+                                } else {
+                                    alert('Failed to copy text. Please copy manually.');
+                                }
+                            });
+                            return;
+                        }
+
+                        navigator.clipboard.writeText(textToCopy).then(() => {
+                            button.innerText = 'Copied!';
+                            setTimeout(() => { button.innerText = originalText; }, 2000);
+                        }).catch(err => {
+                            console.error('Async: Could not copy text: ', err);
+                            // If clipboard API fails (e.g., permissions), try the fallback
+                            fallbackCopy(textToCopy).then((success) => {
+                                if (success) {
+                                    button.innerText = 'Copied!';
+                                    setTimeout(() => { button.innerText = originalText; }, 2000);
+                                } else {
+                                    alert('Failed to copy text. Please copy manually.');
+                                }
+                            });
+                        });
+                    }
+                    """
+                    # --- MODIFICATION END ---
+                    st.markdown(f"<script>{copy_js}</script>", unsafe_allow_html=True)
+
                     for i, item in enumerate(answers, start=1):
+                        # Ensure text is properly escaped for JS
+                        answer_text_json = json.dumps(item["answer"])
+                        button_id = f"copy_button_{i}"
 
                         st.markdown(
                             f"""<div class="answer-card">
@@ -1290,55 +1355,15 @@ def main():
                                     <strong>Your Answer:</strong><br>
                                     {item['answer']}
                                 </div>
+                                <button id="{button_id}" class="copy-button" onclick='copyToClipboard({answer_text_json}, "{button_id}")'>
+                                    📋 Copy Answer
+                                </button>
                             </div>""",
                             unsafe_allow_html=True,
                         )
+                        # Add some space after each card
+                        st.markdown("<br>", unsafe_allow_html=True)
 
-                        col1, col2, col3 = st.columns([3, 3, 2])
-
-                        with col1:
-                            if st.button(
-                                f"📋 Show Copy Area Q{i}",
-                                key=f"copy_q_{i}",
-                                help="Click to show text area for copying",
-                            ):
-                                copy_area_key = f"show_copy_area_{i}"
-                                if copy_area_key not in st.session_state:
-                                    st.session_state[copy_area_key] = False
-                                st.session_state[copy_area_key] = not st.session_state[
-                                    copy_area_key
-                                ]
-                                st.rerun()
-
-                        copy_area_key = f"show_copy_area_{i}"
-                        if (
-                            copy_area_key in st.session_state
-                            and st.session_state[copy_area_key]
-                        ):
-                            st.markdown("---")
-                            st.markdown(f"**📋 Copy Text for Question {i}:**")
-                            st.info(
-                                "💡 **Instructions:** Click in the text area below → Press Ctrl+A (Select All) → Press Ctrl+C (Copy)"
-                            )
-
-                            st.text_area(
-                                f"Question {i} Answer (Ready to Copy):",
-                                value=item["answer"],
-                                height=150,
-                                key=f"copy_text_area_{i}",
-                                help="Click here, select all text (Ctrl+A), then copy (Ctrl+C)",
-                                disabled=False,
-                            )
-
-                            col_close1, col_close2, col_close3 = st.columns([1, 2, 3])
-                            with col_close1:
-                                if st.button(f"❌ Hide", key=f"hide_copy_{i}"):
-                                    st.session_state[copy_area_key] = False
-                                    st.rerun()
-                            with col_close2:
-                                st.markdown("*Click Hide when done copying*")
-
-                        st.markdown("---")
                 else:
                     st.info("ℹ️ No questions were provided to generate answers for.")
 

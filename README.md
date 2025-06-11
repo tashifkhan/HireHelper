@@ -12,6 +12,7 @@ making a tool to take in the resume as a md file and answers the questions for t
 - [x] Get Google Gemini 2.0 Flash to generate answers
 - [x] Smarter prompt templates
 - [x] Real-deal web scraping for company intel
+- [ ] Copy to clipboard finally works oml
 - [ ] Hook into APIs (LinkedIn, company sites, the works)
 - [ ] Grab news and recent company updates automatically
 - [ ] Figure out company culture & values (if possible)
