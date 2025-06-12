@@ -102,18 +102,30 @@ def generate_answers(
         )
 
     template = """
-    You are an expert interview coach.
-    A candidate with this résumé:
+    You are an expert interview coach and career advisor.
+
+    Below is the candidate’s résumé (Markdown):
     ```
     {resume}
     ```
-    is applying for the role of {role} at {company}.{company_context}
-    
-    Answer the question below in at most {word_limit} words,
-    drawing on experiences and skills from the résumé. If relevant company information is available,
-    tailor your answer to show how the candidate's experience aligns with the company's needs and culture.
-    ---
-    Question: {question}
+
+    They are applying for the role of **{role}** at **{company}**{company_context}.
+
+    Your task: craft a clear, concise answer (≤ {word_limit} words) to the interview question below.
+
+    Question:
+    {question}
+
+    Formatting guidelines:
+    1. Start with a one-sentence summary of why this candidate is a great fit.
+    2. Then use 3–4 bullet points that each:
+    • Reference a specific skill or achievement from the résumé  
+    • Include metrics or outcomes whenever possible  
+    • Tie back to the company’s mission, values or culture  
+    3. Maintain a professional, confident tone.
+    4. If no {company_context} is provided, skip references to company culture.
+
+    Answer:
     """
 
     prompt = PromptTemplate(
