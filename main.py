@@ -1,366 +1,21 @@
 import os
-import streamlit as st
-import io
 import json
+import streamlit as st
 from dotenv import load_dotenv
-from langchain_google_genai import GoogleGenerativeAI
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from PyPDF2 import PdfReader
-from docx import Document
 from streamlit.components.v1 import html
 
-
-def generate_answers(
-    resume_text,
-    role,
-    company,
-    questions_list,
-    word_limit,
-    model_provider,
-    model_name,
-    api_keys_dict,
-    user_company_knowledge="",
-    company_research="",
-):
-    """Generates answers to interview questions based on the resume and inputs."""
-    if not questions_list:
-        return []
-
-    llm = None
-    try:
-        if model_provider == "Google":
-            if not api_keys_dict.get("Google"):
-                raise ValueError("Google API Key not provided.")
-            llm = GoogleGenerativeAI(
-                model=model_name,
-                temperature=0.3,
-                google_api_key=api_keys_dict["Google"],
-            )
-        elif model_provider == "OpenAI":
-            if not api_keys_dict.get("OpenAI"):
-                raise ValueError("OpenAI API Key not provided.")
-            llm = ChatOpenAI(
-                model_name=model_name,
-                temperature=0.3,
-                openai_api_key=api_keys_dict["OpenAI"],
-            )
-        elif model_provider == "Claude":
-            if not api_keys_dict.get("Claude"):
-                raise ValueError("Anthropic API Key not provided.")
-            llm = ChatAnthropic(
-                model=model_name,
-                temperature=0.3,
-                anthropic_api_key=api_keys_dict["Claude"],
-            )
-        else:
-            raise ValueError(f"Unsupported model provider: {model_provider}")
-
-    except ValueError as ve:
-        error_msg = str(ve)
-        provider_help = {
-            "Google": "Verify your Google API key at https://aistudio.google.com/app/apikey",
-            "OpenAI": "Verify your OpenAI API key at https://platform.openai.com/api-keys", 
-            "Claude": "Verify your Anthropic API key at https://console.anthropic.com/"
-        }
-        
-        for provider, help_text in provider_help.items():
-            if provider in error_msg:
-                error_msg += f"\n💡 {help_text}"
-                break
-        
-        return [{"question": q, "answer": f"Configuration Error: {error_msg}"} for q in questions_list]
-    except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        if "rate limit" in str(e).lower():
-            error_msg += "\n💡 You may have hit API rate limits. Try again in a few moments."
-        elif "authentication" in str(e).lower() or "unauthorized" in str(e).lower():
-            error_msg += "\n💡 Please check your API key is valid and has sufficient credits."
-        elif "connection" in str(e).lower() or "network" in str(e).lower():
-            error_msg += "\n💡 Network connection issue. Please check your internet connection."
-        
-        return [{"question": q, "answer": f"Error: {error_msg}"} for q in questions_list]
-
-    # Build context about the company
-    company_context = ""
-    if user_company_knowledge.strip():
-        company_context += f"\n\nAdditional information about {company}:\n{user_company_knowledge.strip()}"
-    if company_research.strip():
-        company_context += (
-            f"\n\nResearch findings about {company}:\n{company_research.strip()}"
-        )
-
-    template = """
-    You are an expert interview coach.
-    A candidate with this résumé:
-    ```
-    {resume}
-    ```
-    is applying for the role of {role} at {company}.{company_context}
-    
-    Answer the question below in at most {word_limit} words,
-    drawing on experiences and skills from the résumé. If relevant company information is available,
-    tailor your answer to show how the candidate's experience aligns with the company's needs and culture.
-    ---
-    Question: {question}
-    """
-
-    prompt = PromptTemplate(
-        input_variables=[
-            "resume",
-            "role",
-            "company",
-            "company_context",
-            "question",
-            "word_limit",
-        ],
-        template=template,
-    )
-    chain = LLMChain(llm=llm, prompt=prompt)
-
-    results = []
-    for q in questions_list:
-        try:
-            answer = chain.run(
-                resume=resume_text,
-                role=role,
-                company=company,
-                company_context=company_context,
-                question=q,
-                word_limit=word_limit,
-            )
-            results.append({"question": q, "answer": answer})
-        except Exception as e:
-            results.append({"question": q, "answer": f"Error generating answer: {e}"})
-    return results
-
-
-def process_document(file_bytes, file_name):
-    """Extracts text from uploaded TXT, MD, PDF, or DOCX file."""
-    file_extension = os.path.splitext(file_name)[1].lower()
-    raw_text = ""
-    try:
-        if file_extension == ".txt" or file_extension == ".md":
-            raw_text = file_bytes.decode()
-        elif file_extension == ".pdf":
-            pdf_reader = PdfReader(io.BytesIO(file_bytes))
-            for page in pdf_reader.pages:
-                raw_text += page.extract_text() or ""
-        elif file_extension == ".docx":
-            doc = Document(io.BytesIO(file_bytes))
-            for para in doc.paragraphs:
-                raw_text += para.text + "\n"
-        else:
-            st.error(
-                f"Unsupported file type: {file_extension}. Please upload TXT, MD, PDF, or DOCX."
-            )
-            return None
-    except Exception as e:
-        st.error(f"Error processing file {file_name}: {e}")
-        return None
-    return raw_text
-
-
-def format_resume_text_with_llm(raw_text, model_provider, model_name, api_keys_dict):
-    """Formats the extracted resume text using an LLM."""
-    if not raw_text.strip():
-        return ""
-    llm = None
-    try:
-        if model_provider == "Google":
-            if not api_keys_dict.get("Google"):
-                raise ValueError("Google API Key not provided for resume formatting.")
-            llm = GoogleGenerativeAI(
-                model=model_name,
-                temperature=0.1,
-                google_api_key=api_keys_dict["Google"],
-            )
-        elif model_provider == "OpenAI":
-            if not api_keys_dict.get("OpenAI"):
-                raise ValueError("OpenAI API Key not provided for resume formatting.")
-            llm = ChatOpenAI(
-                model_name=model_name,
-                temperature=0.1,
-                openai_api_key=api_keys_dict["OpenAI"],
-            )
-        elif model_provider == "Claude":
-            if not api_keys_dict.get("Claude"):
-                raise ValueError(
-                    "Anthropic API Key not provided for resume formatting."
-                )
-            llm = ChatAnthropic(
-                model=model_name,
-                temperature=0.1,
-                anthropic_api_key=api_keys_dict["Claude"],
-            )
-        else:
-            raise ValueError(
-                f"Unsupported model provider for resume formatting: {model_provider}"
-            )
-
-        template = """
-        You are a text processing assistant.
-        The following text was extracted from a resume file and might contain formatting errors,
-        unnecessary characters, or be poorly structured.
-        Please clean and reformat this text to be a clear, well-structured resume.
-        Ensure that all key information (experience, education, skills, etc.) is preserved and presented logically.
-        Remove any artifacts from the text extraction process. The output should be only the cleaned resume text.
-        ---
-        Raw Resume Text:
-        ```
-        {raw_resume_text}
-        ```
-        ---
-        Cleaned and Formatted Resume Text:
-        """
-        prompt = PromptTemplate(
-            input_variables=["raw_resume_text"],
-            template=template,
-        )
-        chain = LLMChain(llm=llm, prompt=prompt)
-        formatted_text = chain.run(raw_resume_text=raw_text)
-        return formatted_text.strip()
-    
-    except ValueError as ve:
-        error_msg = str(ve)
-        provider_help = {
-            "Google": "Verify your Google API key at https://aistudio.google.com/app/apikey",
-            "OpenAI": "Verify your OpenAI API key at https://platform.openai.com/api-keys",
-            "Claude": "Verify your Anthropic API key at https://console.anthropic.com/"
-        }
-        
-        for provider, help_text in provider_help.items():
-            if provider in error_msg:
-                st.error(f"Resume formatting failed: {error_msg}\n💡 {help_text}")
-                break
-        else:
-            st.error(f"Resume formatting failed: {error_msg}")
-        
-        return raw_text  # Return original text on specific API key errors
-    except Exception as e:
-        error_msg = f"Error formatting resume text: {str(e)}"
-        if "rate limit" in str(e).lower():
-            error_msg += "\n💡 You may have hit API rate limits. Using original text."
-        elif "authentication" in str(e).lower() or "unauthorized" in str(e).lower():
-            error_msg += "\n💡 API authentication issue. Using original text."
-        
-        st.warning(error_msg)
-        return raw_text  # Return original text on other errors
-
-
-def estimate_cost(provider, model_name, resume_length, num_questions, word_limit):
-    """Estimate the cost of using different providers."""
-    
-    # Rough token estimates (1 token ≈ 0.75 words)
-    resume_tokens = resume_length // 4 * 5  # Resume tokens (input)
-    question_tokens = num_questions * 50  # Question tokens (input)
-    answer_tokens = num_questions * word_limit * 1.3  # Answer tokens (output)
-    
-    total_input_tokens = resume_tokens + question_tokens
-    total_output_tokens = answer_tokens
-    
-    # Pricing per 1M tokens (approximate, as of 2025)
-    pricing = {
-        "Google": {
-            "gemini-2.0-flash-exp": {"input": 0.075, "output": 0.30},
-            "gemini-1.5-pro-latest": {"input": 3.50, "output": 10.50},
-            "gemini-1.5-pro": {"input": 3.50, "output": 10.50},
-            "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-            "gemini-1.5-flash-8b": {"input": 0.0375, "output": 0.15},
-        },
-        "OpenAI": {
-            "gpt-4o": {"input": 2.50, "output": 10.00},
-            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-            "gpt-4-turbo": {"input": 10.00, "output": 30.00},
-            "gpt-4": {"input": 30.00, "output": 60.00},
-            "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
-        },
-        "Claude": {
-            "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00},
-            "claude-3-5-haiku-20241022": {"input": 0.25, "output": 1.25},
-            "claude-3-opus-20240229": {"input": 15.00, "output": 75.00},
-            "claude-3-sonnet-20240229": {"input": 3.00, "output": 15.00},
-            "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
-        }
-    }
-    
-    if provider not in pricing or model_name not in pricing[provider]:
-        return "Cost estimation not available"
-    
-    model_pricing = pricing[provider][model_name]
-    
-    input_cost = (total_input_tokens / 1000000) * model_pricing["input"]
-    output_cost = (total_output_tokens / 1000000) * model_pricing["output"]
-    total_cost = input_cost + output_cost
-    
-    if total_cost < 0.01:
-        return "< $0.01"
-    else:
-        return f"~${total_cost:.3f}"
-
-
-def test_api_key(provider, api_key, model_name):
-    """Test if an API key is valid by making a small test request."""
-    if not api_key:
-        return False, "No API key provided"
-    
-    try:
-        test_prompt = "Hello"
-        
-        if provider == "Google":
-            llm = GoogleGenerativeAI(
-                model=model_name,
-                temperature=0.1,
-                google_api_key=api_key,
-            )
-        elif provider == "OpenAI":
-            llm = ChatOpenAI(
-                model_name=model_name,
-                temperature=0.1,
-                openai_api_key=api_key,
-                max_tokens=10
-            )
-        elif provider == "Claude":
-            llm = ChatAnthropic(
-                model=model_name,
-                temperature=0.1,
-                anthropic_api_key=api_key,
-                max_tokens=10
-            )
-        else:
-            return False, f"Unsupported provider: {provider}"
-        
-        # Make a minimal test call
-        response = llm.invoke(test_prompt)
-        return True, "API key is valid"
-        
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "authentication" in error_msg or "unauthorized" in error_msg:
-            return False, "Invalid API key"
-        elif "rate limit" in error_msg:
-            return False, "Rate limited (but key is likely valid)"
-        elif "model" in error_msg:
-            return False, f"Model '{model_name}' not available"
-        else:
-            return False, f"Connection error: {str(e)[:100]}"
-
-
-def get_company_research(company_name: str, api_keys_dict: dict) -> str:
-    """
-    Placeholder for company research agent.
-    Currently, this function returns a placeholder message.
-    A more advanced implementation would use web scraping tools or APIs
-    to find and summarize information about the specified company.
-    """
-
-    return (
-        f"Automated company research for '{company_name}' is a feature in development. "
-        "This space would contain information gathered by the research agent. "
-        "For now, please rely on the 'What else do you know about the company?' field for specific company insights."
-    )
+# Import all business logic from utils
+from utils import (
+    svg_icons,
+    generate_answers,
+    process_document,
+    format_resume_text_with_llm,
+    estimate_cost,
+    test_api_key,
+    get_company_research,
+    model_descriptions,
+    model_options,
+)
 
 
 def main():
@@ -386,61 +41,127 @@ def main():
 
     if "questions" not in st.session_state:
         st.session_state.questions = [""]
-    
+
     # Initialize API keys in session state
     if "saved_api_keys" not in st.session_state:
-        st.session_state.saved_api_keys = {
-            "Google": "",
-            "OpenAI": "",
-            "Claude": ""
-        }
+        st.session_state.saved_api_keys = {"Google": "", "OpenAI": "", "Claude": ""}
 
     st.markdown(
         """ 
     <style>
     /* Import modern fonts */
-    @import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
     
     /* CSS Variables for consistent theming */
     :root {
-        --primary-color: #0891B2;
-        --primary-dark: #0E7490;
-        --primary-light: #22D3EE;
-        --secondary-color: #3B82F6;
-        --secondary-light: #60A5FA;
+        --primary-color: #6366F1;
+        --primary-dark: #4F46E5;
+        --primary-light: #818CF8;
+        --secondary-color: #8B5CF6;
+        --secondary-light: #A78BFA;
         --accent-color: #06B6D4;
-        --background-dark: #0F172A;
-        --background-medium: #1E293B;
-        --background-light: #334155;
-        --background-card: #475569;
+        --accent-warm: #F59E0B;
+        --background-primary: #0F0F23;
+        --background-secondary: #1A1A40;
+        --background-tertiary: #262654;
+        --background-card: #2D2D5F;
+        --background-surface: #3A3A6B;
         --text-primary: #F8FAFC;
         --text-secondary: #CBD5E1;
         --text-muted: #94A3B8;
-        --border-color: #64748B;
-        --shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        --shadow-hover: 0 8px 24px rgba(8, 145, 178, 0.2);
-        --border-radius: 12px;
-        --border-radius-small: 8px;
-        --gradient-primary: linear-gradient(135deg, #0891B2 0%, #22D3EE 50%, #3B82F6 100%);
-        --gradient-secondary: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%);
-        --gradient-bg: linear-gradient(135deg, #0F172A 0%, #1E293B 50%, #334155 100%);
+        --text-accent: #A5B4FC;
+        --border-color: #4B5563;
+        --border-light: #6B7280;
+        --success: #10B981;
+        --warning: #F59E0B;
+        --error: #EF4444;
+        --shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+        --shadow-hover: 0 12px 40px rgba(99, 102, 241, 0.25);
+        --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
+        --border-radius: 16px;
+        --border-radius-small: 12px;
+        --border-radius-large: 24px;
+        --gradient-primary: linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #06B6D4 100%);
+        --gradient-secondary: linear-gradient(135deg, #8B5CF6 0%, #A78BFA 100%);
+        --gradient-accent: linear-gradient(135deg, #06B6D4 0%, #8B5CF6 100%);
+        --gradient-warm: linear-gradient(135deg, #F59E0B 0%, #EF4444 100%);
+        --gradient-bg: linear-gradient(135deg, #0F0F23 0%, #1A1A40 50%, #262654 100%);
+        --gradient-surface: linear-gradient(135deg, rgba(45, 45, 95, 0.8) 0%, rgba(58, 58, 107, 0.8) 100%);
+        --glass-bg: rgba(45, 45, 95, 0.1);
+        --glass-border: rgba(139, 92, 246, 0.2);
+        --backdrop-blur: blur(20px);
+        --transition-fast: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        --transition-bounce: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    }
+
+    /* Animated background patterns */
+    .stApp::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: 
+            radial-gradient(circle at 20% 80%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
+            radial-gradient(circle at 40% 40%, rgba(6, 182, 212, 0.05) 0%, transparent 50%);
+        animation: backgroundShift 20s ease-in-out infinite alternate;
+        pointer-events: none;
+        z-index: -1;
+    }
+
+    @keyframes backgroundShift {
+        0% { transform: translate(0, 0) rotate(0deg); }
+        100% { transform: translate(20px, -20px) rotate(1deg); }
+    }
+
+    /* Floating particles */
+    .stApp::after {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-image: 
+            radial-gradient(2px 2px at 20px 30px, rgba(255, 255, 255, 0.1), transparent),
+            radial-gradient(2px 2px at 40px 70px, rgba(99, 102, 241, 0.2), transparent),
+            radial-gradient(1px 1px at 90px 40px, rgba(139, 92, 246, 0.15), transparent),
+            radial-gradient(1px 1px at 130px 80px, rgba(6, 182, 212, 0.1), transparent);
+        background-repeat: repeat;
+        background-size: 200px 150px;
+        animation: particleFloat 25s linear infinite;
+        pointer-events: none;
+        z-index: -1;
+        opacity: 0.6;
+    }
+
+    @keyframes particleFloat {
+        0% { transform: translateY(0px); }
+        100% { transform: translateY(-100vh); }
     }
 
     /* Main app styling */
     .stApp {
         background: var(--gradient-bg);
         color: var(--text-primary);
-        font-family: 'Comfortaa', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
         min-height: 100vh;
         padding: 0 !important;
+        position: relative;
+        overflow-x: hidden;
     }
 
     /* Main content container */
     .main .block-container {
         padding: 2rem 1rem !important;
-        max-width: 1200px !important;
+        max-width: 1400px !important;
         margin: 0 auto !important;
         width: 100% !important;
+        position: relative;
+        z-index: 1;
     }
 
     /* Center all main content */
@@ -454,7 +175,7 @@ def main():
     /* Ensure proper spacing for content */
     .element-container {
         width: 100% !important;
-        max-width: 1200px !important;
+        max-width: 1400px !important;
         margin: 0 auto !important;
     }
 
@@ -471,98 +192,98 @@ def main():
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Responsive design */
-    @media (max-width: 768px) {
-        .stApp {
-            padding-top: 1rem !important;
-        }
-        
-        .main .block-container {
-            padding: 1rem 0.5rem !important;
-        }
-        
-        /* Mobile-friendly sidebar */
-        .css-1d391kg {
-            width: 100% !important;
-            transform: translateX(-100%);
-            transition: transform 0.3s ease;
-        }
-        
-        .css-1d391kg.css-1aumxhk {
-            transform: translateX(0);
-        }
-        
-        /* Mobile title adjustments */
-        h1 {
-            font-size: 2rem !important;
-            text-align: center;
-            margin-bottom: 0.5rem !important;
-        }
-        
-        /* Mobile button adjustments */
-        .stButton > button {
-            width: 100% !important;
-            margin-bottom: 0.5rem !important;
-        }
-        
-        /* Mobile input adjustments */
-        .stTextInput input, .stTextArea textarea {
-            font-size: 16px !important; /* Prevents zoom on iOS */
-        }
+    /* Advanced Sidebar styling with glassmorphism */
+    .css-1d391kg {
+        background: var(--glass-bg) !important;
+        backdrop-filter: var(--backdrop-blur) !important;
+        -webkit-backdrop-filter: var(--backdrop-blur) !important;
+        border-right: 3px solid var(--glass-border) !important;
+        box-shadow: 
+            var(--shadow),
+            inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+        padding: 2rem 1.5rem !important;
+        position: relative;
+        overflow: hidden;
     }
 
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: linear-gradient(180deg, var(--background-light) 0%, var(--background-medium) 100%);
-        border-right: 3px solid var(--primary-color);
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(10px);
-        padding: 1.5rem 1rem !important;
+    /* Sidebar glow effect */
+    .css-1d391kg::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+            45deg,
+            rgba(99, 102, 241, 0.05) 0%,
+            rgba(139, 92, 246, 0.05) 50%,
+            rgba(6, 182, 212, 0.05) 100%
+        );
+        pointer-events: none;
+        z-index: -1;
     }
 
     .css-1d391kg .stMarkdown {
         color: var(--text-secondary);
     }
 
-    /* Sidebar section headers */
+    /* Modern sidebar section headers */
     .css-1d391kg .stMarkdown h3 {
-        color: var(--primary-color) !important;
-        font-weight: 600 !important;
+        color: var(--primary-light) !important;
+        font-weight: 700 !important;
+        font-size: 1.4rem !important;
         margin-top: 0 !important;
-        margin-bottom: 1.5rem !important;
-        padding-bottom: 0.5rem !important;
+        margin-bottom: 2rem !important;
+        padding-bottom: 0.75rem !important;
         border-bottom: 2px solid var(--primary-color) !important;
-        font-size: 1.25rem !important;
+        position: relative;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .css-1d391kg .stMarkdown h3::after {
+        content: '';
+        position: absolute;
+        bottom: -2px;
+        left: 0;
+        width: 60px;
+        height: 2px;
+        background: var(--gradient-primary);
+        border-radius: 2px;
     }
 
     /* Sidebar form elements spacing */
     .css-1d391kg .stTextInput,
     .css-1d391kg .stTextArea,
     .css-1d391kg .stNumberInput,
-    .css-1d391kg .stFileUploader {
-        margin-bottom: 1.5rem !important;
+    .css-1d391kg .stFileUploader,
+    .css-1d391kg .stSelectbox {
+        margin-bottom: 2rem !important;
     }
 
-    /* Sidebar button styling */
-    .css-1d391kg .stButton {
-        margin-bottom: 1rem !important;
-    }
-
-    /* Enhanced button styling */
+    /* Advanced button styling with 3D effects */
     .stButton > button {
         background: var(--gradient-primary);
         color: white;
         border: none;
         border-radius: var(--border-radius-small);
         font-weight: 600;
-        font-family: 'Comfortaa', sans-serif;
-        padding: 0.875rem 1.75rem;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3);
+        font-family: 'Inter', sans-serif;
+        font-size: 0.95rem;
+        padding: 1rem 2rem;
+        transition: var(--transition-smooth);
+        box-shadow: 
+            0 8px 25px rgba(99, 102, 241, 0.3),
+            inset 0 1px 0 rgba(255, 255, 255, 0.2);
         text-transform: none;
         letter-spacing: 0.025em;
         position: relative;
         overflow: hidden;
+        cursor: pointer;
+        transform: translateY(0);
     }
 
     .stButton > button::before {
@@ -572,8 +293,8 @@ def main():
         left: -100%;
         width: 100%;
         height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-        transition: left 0.5s;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+        transition: left 0.6s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     .stButton > button:hover::before {
@@ -582,69 +303,87 @@ def main():
 
     .stButton > button:hover {
         background: var(--gradient-secondary);
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-hover);
+        transform: translateY(-3px) scale(1.02);
+        box-shadow: 
+            var(--shadow-hover),
+            var(--shadow-glow),
+            inset 0 1px 0 rgba(255, 255, 255, 0.3);
     }
 
     .stButton > button:active {
-        transform: translateY(0);
+        transform: translateY(-1px) scale(1.01);
+        transition: var(--transition-fast);
     }
 
-    /* Secondary button styling (remove buttons) */
+    /* Remove button styling */
     div[data-testid="column"] button {
-        background: linear-gradient(135deg, #64748B 0%, #475569 100%) !important;
-        color: white !important;
-        border: none !important;
+        background: linear-gradient(135deg, var(--background-surface) 0%, var(--background-card) 100%) !important;
+        color: var(--text-secondary) !important;
+        border: 2px solid var(--border-color) !important;
         border-radius: var(--border-radius-small) !important;
         font-weight: 500 !important;
-        padding: 0.5rem !important;
-        transition: all 0.3s ease !important;
-        min-height: 2.5rem !important;
+        padding: 0.75rem !important;
+        transition: var(--transition-smooth) !important;
+        min-height: 3rem !important;
+        backdrop-filter: blur(10px) !important;
     }
 
     div[data-testid="column"] button:hover {
-        background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%) !important;
-        transform: translateY(-1px) !important;
-        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3) !important;
+        background: var(--gradient-warm) !important;
+        color: white !important;
+        border-color: var(--accent-warm) !important;
+        transform: translateY(-2px) scale(1.05) !important;
+        box-shadow: 0 8px 25px rgba(239, 68, 68, 0.3) !important;
     }
 
-    /* Modern input styling */
+    /* Advanced input styling with floating labels effect */
     .stTextInput input, 
     .stTextArea textarea, 
-    .stNumberInput input {
-        background-color: var(--background-card) !important;
+    .stNumberInput input,
+    .stSelectbox > div > div {
+        background: var(--glass-bg) !important;
         border: 2px solid var(--border-color) !important;
         border-radius: var(--border-radius-small) !important;
         color: var(--text-primary) !important;
-        font-family: 'Comfortaa', sans-serif !important;
-        font-size: 14px !important;
-        padding: 0.875rem !important;
-        transition: all 0.3s ease !important;
-        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.95rem !important;
+        padding: 1rem 1.25rem !important;
+        transition: var(--transition-smooth) !important;
+        box-shadow: 
+            inset 0 2px 4px rgba(0, 0, 0, 0.1),
+            0 0 0 0 rgba(99, 102, 241, 0) !important;
+        backdrop-filter: blur(10px) !important;
+        position: relative;
     }
 
     .stTextInput input:focus, 
     .stTextArea textarea:focus, 
-    .stNumberInput input:focus {
+    .stNumberInput input:focus,
+    .stSelectbox > div > div:focus-within {
         border-color: var(--primary-color) !important;
-        box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1), inset 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 
+            0 0 0 4px rgba(99, 102, 241, 0.1),
+            inset 0 2px 4px rgba(0, 0, 0, 0.1),
+            var(--shadow-glow) !important;
         outline: none !important;
-        background-color: var(--background-light) !important;
+        background: var(--background-surface) !important;
+        transform: translateY(-2px);
     }
 
     .stTextArea textarea {
-        min-height: 80px !important;
+        min-height: 100px !important;
         resize: vertical !important;
     }
 
-    /* File uploader styling */
+    /* Advanced File uploader with animated upload zone */
     .stFileUploader {
-        border: 2px dashed var(--border-color) !important;
-        border-radius: var(--border-radius) !important;
-        background: linear-gradient(135deg, var(--background-card) 0%, var(--background-light) 100%) !important;
-        padding: 2.5rem !important;
+        border: 3px dashed var(--border-light) !important;
+        border-radius: var(--border-radius-large) !important;
+        background: var(--glass-bg) !important;
+        backdrop-filter: var(--backdrop-blur) !important;
+        padding: 3rem !important;
         text-align: center !important;
-        transition: all 0.3s ease !important;
+        transition: var(--transition-bounce) !important;
         position: relative;
         overflow: hidden;
     }
@@ -658,106 +397,398 @@ def main():
         bottom: 0;
         background: var(--gradient-primary);
         opacity: 0;
-        transition: opacity 0.3s ease;
+        transition: var(--transition-smooth);
         pointer-events: none;
+    }
+
+    .stFileUploader::after {
+        content: '⬆';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 4rem;
+        opacity: 0.1;
+        pointer-events: none;
+        transition: var(--transition-smooth);
     }
 
     .stFileUploader:hover::before {
         opacity: 0.05;
     }
 
+    .stFileUploader:hover::after {
+        opacity: 0.3;
+        transform: translate(-50%, -50%) scale(1.1);
+    }
+
     .stFileUploader:hover {
         border-color: var(--primary-color) !important;
-        transform: translateY(-2px);
+        transform: translateY(-4px) scale(1.02);
         box-shadow: var(--shadow-hover);
+        background: var(--background-surface) !important;
     }
 
-    .stFileUploader label {
-        color: var(--text-secondary) !important;
-        font-weight: 500 !important;
-        cursor: pointer !important;
+    /* Advanced typography with text effects */
+    h1 {
+        color: transparent !important;
+        font-weight: 800 !important;
+        font-size: 3.5rem !important;
+        margin-bottom: 1rem !important;
+        text-align: center;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        position: relative;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+    }
+
+    h1::after {
+        content: '';
+        position: absolute;
+        bottom: -10px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 120px;
+        height: 4px;
+        background: var(--gradient-primary);
+        border-radius: 2px;
+        animation: titleGlow 2s ease-in-out infinite alternate;
+    }
+
+    @keyframes titleGlow {
+        0% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.5); }
+        100% { box-shadow: 0 0 40px rgba(139, 92, 246, 0.8); }
+    }
+
+    h2, h3 {
+        color: var(--primary-light) !important;
+        font-weight: 700 !important;
+        margin-top: 3rem !important;
+        margin-bottom: 2rem !important;
+        font-size: 1.8rem !important;
+        line-height: 1.2 !important;
+        position: relative;
+    }
+
+    .subtitle {
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 1.25rem;
+        margin-bottom: 3rem;
+        font-weight: 400;
+        line-height: 1.6;
+        max-width: 700px;
+        margin-left: auto;
+        margin-right: auto;
+        opacity: 0.9;
+    }
+
+    /* Advanced alert styling with icons */
+    .stSuccess {
+        background: linear-gradient(135deg, var(--success) 0%, #059669 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        box-shadow: 
+            var(--shadow),
+            0 0 30px rgba(16, 185, 129, 0.2) !important;
+        border-left: 5px solid #34D399 !important;
+        backdrop-filter: blur(10px) !important;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stWarning {
+        background: linear-gradient(135deg, var(--warning) 0%, #D97706 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        box-shadow: 
+            var(--shadow),
+            0 0 30px rgba(245, 158, 11, 0.2) !important;
+        border-left: 5px solid #FBBF24 !important;
+        backdrop-filter: blur(10px) !important;
+    }
+
+    .stError {
+        background: linear-gradient(135deg, var(--error) 0%, #DC2626 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        box-shadow: 
+            var(--shadow),
+            0 0 30px rgba(239, 68, 68, 0.2) !important;
+        border-left: 5px solid #F87171 !important;
+        backdrop-filter: blur(10px) !important;
+    }
+
+    .stInfo {
+        background: var(--gradient-secondary) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius) !important;
+        padding: 1.5rem !important;
+        box-shadow: 
+            var(--shadow),
+            0 0 30px rgba(139, 92, 246, 0.2) !important;
+        border-left: 5px solid var(--secondary-light) !important;
+        backdrop-filter: blur(10px) !important;
+    }
+
+    /* Advanced loading spinner */
+    .stSpinner > div {
+        border-top-color: var(--primary-color) !important;
+        border-right-color: var(--primary-light) !important;
+        animation: spin 1s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite !important;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    /* Advanced answer cards with 3D effects */
+    .answer-card {
+        background: var(--glass-bg);
+        backdrop-filter: var(--backdrop-blur);
+        border: 2px solid var(--glass-border);
+        border-left: 6px solid var(--primary-color);
+        border-radius: var(--border-radius-large);
+        padding: 2.5rem;
+        margin: 2rem 0;
+        box-shadow: 
+            var(--shadow),
+            inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        transition: var(--transition-smooth);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .answer-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--gradient-primary);
+        opacity: 0;
+        transition: var(--transition-smooth);
+        pointer-events: none;
+    }
+
+    .answer-card:hover::before {
+        opacity: 0.03;
+    }
+
+    .answer-card:hover {
+        transform: translateY(-8px) scale(1.01);
+        box-shadow: 
+            var(--shadow-hover),
+            var(--shadow-glow),
+            inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        border-left-color: var(--accent-color);
+        border-color: var(--primary-light);
+    }
+
+    .question-header {
+        color: var(--primary-light);
+        font-weight: 700;
+        font-size: 1.25rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
         position: relative;
         z-index: 1;
-        display: block !important;
-        width: 100% !important;
-        text-align: center !important;
     }
 
-    /* File uploader content wrapper */
-    .stFileUploader > div {
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
-        width: 100% !important;
+    .question-header::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: var(--gradient-primary);
+        border-radius: 50%;
+        box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
+        animation: pulse 2s ease-in-out infinite alternate;
     }
 
-    /* File uploader section layout improvements */
-    .stFileUploader section {
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 1.5rem !important;
-        width: 100% !important;
+    @keyframes pulse {
+        0% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.5); }
+        100% { box-shadow: 0 0 30px rgba(139, 92, 246, 0.8); }
     }
 
-    .stFileUploader section > div {
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 1rem !important;
-        width: 100% !important;
-        text-align: center !important;
+    .answer-text {
+        color: var(--text-primary);
+        line-height: 1.8;
+        font-size: 1.05rem;
+        margin-bottom: 1.5rem;
+        position: relative;
+        z-index: 1;
     }
 
-    /* File uploader text styling */
-    .stFileUploader section p,
-    .stFileUploader section span,
-    .stFileUploader section small {
-        text-align: center !important;
-        display: block !important;
-        width: 100% !important;
-        margin: 0 auto !important;
-    }
-
-    /* Browse files button styling */
-    .stFileUploader button {
-        background: var(--gradient-primary) !important;
+    /* Advanced copy button with ripple effect */
+    .copy-button {
+        background: linear-gradient(135deg, var(--success) 0%, #059669 100%) !important;
         color: white !important;
         border: none !important;
         border-radius: var(--border-radius-small) !important;
         font-weight: 600 !important;
-        font-family: 'Comfortaa', sans-serif !important;
-        padding: 0.875rem 1.75rem !important;
-        transition: all 0.3s ease !important;
-        box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3) !important;
-        text-transform: none !important;
-        letter-spacing: 0.025em !important;
-        margin: 1rem auto 0 auto !important;
-        position: relative !important;
-        overflow: hidden !important;
-        display: block !important;
-        width: auto !important;
+        font-family: 'Inter', sans-serif !important;
+        padding: 1rem 2rem !important;
+        transition: var(--transition-smooth) !important;
         min-width: 150px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.75rem !important;
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
     }
 
-    .stFileUploader button:hover {
-        background: var(--gradient-secondary) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: var(--shadow-hover) !important;
+    .copy-button::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        transition: width 0.6s, height 0.6s, top 0.6s, left 0.6s;
+        transform: translate(-50%, -50%);
     }
 
-    .stFileUploader button:active {
-        transform: translateY(0) !important;
+    .copy-button:active::before {
+        width: 300px;
+        height: 300px;
+        top: 50%;
+        left: 50%;
     }
 
-    /* Hide ALL file uploader close/remove buttons - aggressive approach */
+    .copy-button:hover {
+        background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
+        transform: translateY(-2px) scale(1.05) !important;
+        box-shadow: 
+            0 8px 30px rgba(16, 185, 129, 0.4),
+            0 0 40px rgba(16, 185, 129, 0.2) !important;
+    }
+
+    /* Progress bar with glow effect */
+    .stProgress > div > div {
+        background: var(--gradient-primary) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 0 20px rgba(99, 102, 241, 0.5) !important;
+    }
+
+    .stProgress > div {
+        background: var(--background-surface) !important;
+        border-radius: 10px !important;
+    }
+
+    /* Advanced expander styling */
+    .streamlit-expander {
+        background: var(--glass-bg) !important;
+        backdrop-filter: var(--backdrop-blur) !important;
+        border: 2px solid var(--glass-border) !important;
+        border-radius: var(--border-radius) !important;
+        margin-bottom: 2rem !important;
+        overflow: hidden;
+        transition: var(--transition-smooth);
+    }
+
+    .streamlit-expander:hover {
+        border-color: var(--primary-color) !important;
+        box-shadow: var(--shadow-glow);
+        transform: translateY(-2px);
+    }
+
+    .streamlit-expanderHeader {
+        padding: 1.5rem 2rem !important;
+        font-weight: 700 !important;
+        font-size: 1.2rem !important;
+        color: var(--primary-light) !important;
+        background: var(--gradient-surface) !important;
+        backdrop-filter: blur(20px) !important;
+        border-radius: var(--border-radius) var(--border-radius) 0 0 !important;
+        position: relative;
+    }
+
+    .streamlit-expanderContent {
+        padding: 2rem !important;
+        background: var(--glass-bg) !important;
+    }
+
+    /* Responsive design improvements */
+    @media (max-width: 768px) {
+        :root {
+            --border-radius: 12px;
+            --border-radius-small: 8px;
+            --border-radius-large: 16px;
+        }
+        
+        .stApp {
+            padding-top: 1rem !important;
+        }
+        
+        .main .block-container {
+            padding: 1rem 0.75rem !important;
+        }
+        
+        h1 {
+            font-size: 2.5rem !important;
+        }
+        
+        .subtitle {
+            font-size: 1.1rem !important;
+            margin-bottom: 2rem !important;
+        }
+        
+        .answer-card {
+            padding: 1.5rem !important;
+            margin: 1.5rem 0 !important;
+        }
+        
+        .stButton > button {
+            padding: 0.875rem 1.5rem !important;
+            font-size: 0.9rem !important;
+        }
+        
+        .stFileUploader {
+            padding: 2rem !important;
+        }
+    }
+
+    /* Accessibility improvements with better focus indicators */
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+        outline: 3px solid var(--primary-color) !important;
+        outline-offset: 3px !important;
+        box-shadow: 0 0 0 6px rgba(99, 102, 241, 0.2) !important;
+    }
+
+    /* Hide file uploader remove buttons */
     .stFileUploader button[kind="secondary"],
-    .stFileUploader button[data-testid="stButton"],
-    .stFileUploader .stButton,
-    .stFileUploader button:not([type="file"]):not(.stDownloadButton),
+    .stFileUploader button[data-testid="stButton"]:not([type="button"]),
+    .stFileUploader .stButton:not([type="button"]),
     .stFileUploader section button[title*="Remove"],
     .stFileUploader section button[title*="remove"],
     .stFileUploader section button[title*="Delete"],
@@ -772,430 +803,90 @@ def main():
         pointer-events: none !important;
     }
 
-    /* Hide any button that's not the main browse button */
-    .stFileUploader section > div > button:not([type="button"]) {
-        display: none !important;
-    }
-
-    /* Make sure only the browse files button is visible */
+    /* File uploader button styling */
     .stFileUploader button[type="button"] {
-        display: block !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-    }
-
-    /* Typography improvements */
-    h1 {
-        color: transparent !important;
-        font-weight: 700 !important;
-        font-size: 2.75rem !important;
-        margin-bottom: 0.5rem !important;
-        text-align: center;
-        background: var(--gradient-primary);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-
-    h2, h3 {
-        color: var(--primary-color) !important;
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: var(--border-radius-small) !important;
         font-weight: 600 !important;
-        margin-top: 2rem !important;
-        margin-bottom: 1.5rem !important;
-        font-size: 1.5rem !important;
-        line-height: 1.2 !important;
+        font-family: 'Inter', sans-serif !important;
+        padding: 1rem 2rem !important;
+        transition: var(--transition-smooth) !important;
+        box-shadow: 0 8px 25px rgba(99, 102, 241, 0.3) !important;
+        text-transform: none !important;
+        letter-spacing: 0.025em !important;
+        margin: 1rem auto 0 auto !important;
+        position: relative !important;
+        overflow: hidden !important;
+        display: block !important;
+        width: auto !important;
+        min-width: 180px !important;
     }
 
-    /* Special styling for sidebar headings */
-    .css-1d391kg h3 {
-        margin-top: 0 !important;
-        margin-bottom: 1.5rem !important;
-        font-size: 1.25rem !important;
-    }
-
-    /* Section headers in main content */
-    .element-container h2,
-    .element-container h3 {
-        text-align: left !important;
-        padding-left: 0 !important;
-    }
-
-    .subtitle {
-        text-align: center;
-        color: var(--text-secondary);
-        font-size: 1.125rem;
-        margin-bottom: 2.5rem;
-        font-weight: 400;
-        line-height: 1.6;
-        max-width: 600px;
-        margin-left: auto;
-        margin-right: auto;
-    }
-
-    /* Alert and notification styling */
-    .stSuccess {
-        background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: var(--border-radius-small) !important;
-        padding: 1.25rem !important;
-        box-shadow: var(--shadow) !important;
-        border-left: 4px solid #34D399 !important;
-    }
-
-    .stWarning {
-        background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: var(--border-radius-small) !important;
-        padding: 1.25rem !important;
-        box-shadow: var(--shadow) !important;
-        border-left: 4px solid #FBBF24 !important;
-    }
-
-    .stError {
-        background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: var(--border-radius-small) !important;
-        padding: 1.25rem !important;
-        box-shadow: var(--shadow) !important;
-        border-left: 4px solid #F87171 !important;
-    }
-
-    .stInfo {
+    .stFileUploader button[type="button"]:hover {
         background: var(--gradient-secondary) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: var(--border-radius-small) !important;
-        padding: 1.25rem !important;
-        box-shadow: var(--shadow) !important;
-        border-left: 4px solid var(--secondary-light) !important;
+        transform: translateY(-2px) scale(1.05) !important;
+        box-shadow: var(--shadow-hover) !important;
     }
 
-    /* Spinner styling */
-    .stSpinner > div {
-        border-top-color: var(--primary-color) !important;
-        border-right-color: var(--primary-light) !important;
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
     }
 
-    /* Card-like containers for answers */
-    .answer-card {
-        background: linear-gradient(135deg, var(--background-card) 0%, var(--background-light) 100%);
-        border: 1px solid var(--border-color);
-        border-left: 4px solid var(--primary-color);
-        border-radius: var(--border-radius);
-        padding: 2rem;
-        margin: 1.5rem 0;
-        box-shadow: var(--shadow);
-        transition: all 0.4s ease;
-        position: relative;
-        overflow: hidden;
+    ::-webkit-scrollbar-track {
+        background: var(--background-secondary);
+        border-radius: 4px;
     }
 
-    .answer-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+    ::-webkit-scrollbar-thumb {
         background: var(--gradient-primary);
-        opacity: 0;
-        transition: opacity 0.3s ease;
-        pointer-events: none;
+        border-radius: 4px;
+        box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
     }
 
-    .answer-card:hover::before {
-        opacity: 0.02;
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--gradient-secondary);
     }
 
-    .answer-card:hover {
-        transform: translateY(-4px);
-        box-shadow: var(--shadow-hover);
-        border-left-color: var(--accent-color);
-    }
-
-    .question-header {
-        color: var(--primary-color);
-        font-weight: 600;
-        font-size: 1.125rem;
-        margin-bottom: 1.25rem;
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        position: relative;
-        z-index: 1;
-    }
-
-    .answer-text {
+    /* Selection styling */
+    ::selection {
+        background: rgba(99, 102, 241, 0.3);
         color: var(--text-primary);
-        line-height: 1.7;
-        font-size: 1rem;
-        margin-bottom: 1rem;
-        position: relative;
-        z-index: 1;
     }
 
-    /* Horizontal dividers */
-    hr {
-        border: none !important;
-        height: 2px !important;
-        background: var(--gradient-primary) !important;
-        margin: 3rem 0 !important;
-        border-radius: 1px;
+    ::-moz-selection {
+        background: rgba(99, 102, 241, 0.3);
+        color: var(--text-primary);
     }
-
-    /* Copy area styling */
-    .copy-area {
-        background: linear-gradient(135deg, var(--background-card) 0%, var(--background-light) 100%);
-        border: 2px solid var(--primary-color);
-        border-radius: var(--border-radius);
-        padding: 1.5rem;
-        margin: 1.5rem 0;
-        box-shadow: var(--shadow);
-    }
-
-    .copy-area h4 {
-        color: var(--primary-color) !important;
-        margin-bottom: 0.75rem !important;
-        font-size: 1.125rem !important;
-    }
-
-    /* Mobile-specific improvements */
-    @media (max-width: 480px) {
-        .stApp {
-            padding: 0.75rem !important;
-        }
-        
-        h1 {
-            font-size: 2rem !important;
-        }
-        
-        .subtitle {
-            font-size: 1rem !important;
-            margin-bottom: 2rem !important;
-        }
-        
-        .answer-card {
-            padding: 1.25rem !important;
-            margin: 1rem 0 !important;
-        }
-        
-        .stButton > button {
-            padding: 0.75rem 1.25rem !important;
-            font-size: 0.9rem !important;
-        }
-    }
-
-    /* Accessibility improvements */
-    @media (prefers-reduced-motion: reduce) {
-        * {
-            animation-duration: 0.01ms !important;
-            animation-iteration-count: 1 !important;
-            transition-duration: 0.01ms !important;
-        }
-    }
-
-    /* Focus indicators for better accessibility */
-    button:focus-visible,
-    input:focus-visible,
-    textarea:focus-visible {
-        outline: 2px solid var(--primary-color) !important;
-        outline-offset: 2px !important;
-    }
-
-    /* Column alignment improvements */
-    div[data-testid="column"] {
-        display: flex !important;
-        flex-direction: column !important;
-        justify-content: flex-start !important;
-        align-items: stretch !important;
-        gap: 0.5rem !important;
-    }
-
-    /* Question input sections */
-    .css-1d391kg div[data-testid="column"] {
-        gap: 0.75rem !important;
-    }
-
-    /* Question text areas specific styling */
-    .css-1d391kg .stTextArea {
-        margin-bottom: 1rem !important;
-    }
-
-    .css-1d391kg .stTextArea label {
-        font-weight: 600 !important;
-        color: var(--text-primary) !important;
-        margin-bottom: 0.5rem !important;
-        font-size: 0.95rem !important;
-    }
-
-    /* Question remove button alignment */
-    .css-1d391kg div[data-testid="column"]:last-child {
-        justify-content: flex-end !important;
-        padding-top: 1.5rem !important;
-    }
-
-    /* Form field container alignment */
-    .stTextInput,
-    .stTextArea,
-    .stNumberInput,
-    .stSelectbox {
-        margin-bottom: 1rem !important;
-    }
-
-    /* Ensure labels are properly aligned */
-    .stTextInput label,
-    .stTextArea label,
-    .stNumberInput label,
-    .stSelectbox label {
-        font-weight: 500 !important;
-        color: var(--text-secondary) !important;
-        margin-bottom: 0.5rem !important;
-        display: block !important;
-    }
-
-    /* Better button alignment in columns */
-    div[data-testid="column"] .stButton {
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        margin-top: auto !important;
-    }
-
-    /* Remove button specific alignment */
-    div[data-testid="column"] .stButton button {
-        width: 100% !important;
-        height: fit-content !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-    }
-
-    /* Progress bar styling */
-    .stProgress > div > div {
-        background: var(--gradient-primary) !important;
-    }
-
-    /* Expander styling */
-    .streamlit-expander {
-        background: var(--background-card) !important;
-        border: 1px solid var(--border-color) !important;
-        border-radius: var(--border-radius-small) !important;
-        margin-bottom: 1.5rem !important;
-    }
-
-    .streamlit-expander:hover {
-        border-color: var(--primary-color) !important;
-    }
-
-    /* Expander content alignment */
-    .streamlit-expander .streamlit-expanderContent {
-        padding: 1.5rem !important;
-    }
-
-    /* Expander header styling */
-    .streamlit-expander .streamlit-expanderHeader {
-        padding: 1rem 1.5rem !important;
-        font-weight: 600 !important;
-        font-size: 1.1rem !important;
-        color: var(--primary-color) !important;
-        background: linear-gradient(135deg, var(--background-light) 0%, var(--background-card) 100%) !important;
-        border-radius: var(--border-radius-small) var(--border-radius-small) 0 0 !important;
-    }
-
-    /* Better spacing within expanders */
-    .streamlit-expanderContent .element-container {
-        margin-bottom: 1rem !important;
-    }
-
-    /* Container spacing improvements */
-    .element-container {
-        margin-bottom: 1rem !important;
-    }
-
-    /* Better spacing for form sections */
-    .stForm {
-        border: none !important;
-        padding: 0 !important;
-    }
-
-    /* Checkbox alignment */
-    .stCheckbox {
-        margin-bottom: 1.5rem !important;
-    }
-
-    .stCheckbox label {
-        display: flex !important;
-        align-items: center !important;
-        gap: 0.5rem !important;
-    }
-
-    /* Copy button specific styling */
-    .copy-button {
-        background: linear-gradient(135deg, #059669 0%, #10B981 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: var(--border-radius-small) !important;
-        font-weight: 500 !important;
-        padding: 0.75rem 1.5rem !important;
-        transition: all 0.3s ease !important;
-        min-width: 120px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 0.5rem !important;
-        cursor: pointer;
-    }
-
-    .copy-button:hover {
-        background: linear-gradient(135deg, #047857 0%, #059669 100%) !important;
-        transform: translateY(-1px) !important;
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3) !important;
-    }
-
-    .copy-button-copied {
-        background: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%) !important;
-        color: white !important;
-    }
-
-    /* Toast notification styling */
-    .copy-toast {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: linear-gradient(135deg, #10B981 0%, #059669 100%);
-        color: white;
-        padding: 1rem 1.5rem;
-        border-radius: var(--border-radius-small);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        z-index: 9999;
-        font-family: 'Comfortaa', sans-serif;
-        font-weight: 500;
-        animation: slideIn 0.3s ease-out;
-    }
-
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-
     </style>
     """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("<h1>Hire Helper</h1>", unsafe_allow_html=True)
+    # Enhanced title with animated subtitle
     st.markdown(
-        '<p class="subtitle">Your AI-powered interview preparation companion. Upload your resume, add questions, and get personalized answers that showcase your professional experience.</p>',
+        f"""
+    <div style="text-align: center; margin-bottom: 3rem;">
+        <h1 style="margin-bottom: 0.5rem;">
+            {svg_icons['brain']} Hire Helper
+        </h1>
+        <div class="subtitle" style="position: relative;">
+            Your AI-powered interview preparation companion
+            <div style="position: absolute; top: -20px; right: -20px; animation: float 3s ease-in-out infinite;">
+                {svg_icons['sparkles']}
+            </div>
+        </div>
+    </div>
+    
+    <style>
+    @keyframes float {{
+        0%, 100% {{ transform: translateY(0px) rotate(0deg); }}
+        50% {{ transform: translateY(-10px) rotate(180deg); }}
+    }}
+    </style>
+    """,
         unsafe_allow_html=True,
     )
 
@@ -1215,70 +906,90 @@ def main():
 
         st.markdown("### Bring Your Own API Keys")
         st.markdown("**Enter your API keys to get started:**")
-        st.markdown("You only need **one** API key to use Hire Helper. Choose your preferred provider:")
-        
+        st.markdown(
+            "You only need **one** API key to use Hire Helper. Choose your preferred provider:"
+        )
+
         # Provider comparison table
         with st.expander("Provider Comparison", expanded=False):
             comparison_data = {
                 "Provider": ["Google Gemini", "OpenAI GPT", "Anthropic Claude"],
                 "Free Tier": ["Generous", "Limited trial", "Limited trial"],
                 "Best Models": ["Gemini 2.0 Flash", "GPT-4o", "Claude 3.5 Sonnet"],
-                "Pricing": ["$0-0.075/1K tokens", "$0.50-60/1M tokens", "$3-75/1M tokens"],
-                "Strengths": ["Fast, multimodal", "Versatile, popular", "Thoughtful, ethical"]
+                "Pricing": [
+                    "$0-0.075/1K tokens",
+                    "$0.50-60/1M tokens",
+                    "$3-75/1M tokens",
+                ],
+                "Strengths": [
+                    "Fast, multimodal",
+                    "Versatile, popular",
+                    "Thoughtful, ethical",
+                ],
             }
-            
+
             st.table(comparison_data)
-            st.markdown("**Recommendation**: Start with Google Gemini for the best free tier!")
-            
+            st.markdown(
+                "**Recommendation**: Start with Google Gemini for the best free tier!"
+            )
+
             # Add use case recommendations
             st.markdown("### Which Provider Should You Choose?")
-            
+
             rec_col1, rec_col2 = st.columns(2)
-            
+
             with rec_col1:
                 st.markdown("**Choose Google Gemini if:**")
                 st.markdown("• You want to try for free")
                 st.markdown("• You need the latest AI capabilities")
                 st.markdown("• You want fast response times")
                 st.markdown("• You're processing multiple documents")
-                
+
                 st.markdown("**Choose OpenAI GPT if:**")
                 st.markdown("• You need maximum compatibility")
                 st.markdown("• You're familiar with ChatGPT")
                 st.markdown("• You're using this for business")
-            
+
             with rec_col2:
                 st.markdown("**Choose Anthropic Claude if:**")
                 st.markdown("• You need thoughtful, nuanced responses")
                 st.markdown("• You're working with complex writing tasks")
                 st.markdown("• You prioritize safety and ethics")
                 st.markdown("• You need detailed analysis")
-                
+
                 st.markdown("**Pro Tip:**")
-                st.markdown("Start with Google Gemini's free tier, then upgrade to paid services if you need more volume or specific capabilities!")
-            
+                st.markdown(
+                    "Start with Google Gemini's free tier, then upgrade to paid services if you need more volume or specific capabilities!"
+                )
+
             # Quick setup guides
             st.markdown("### Quick Setup Guides")
-            
+
             setup_col1, setup_col2, setup_col3 = st.columns(3)
-            
+
             with setup_col1:
                 st.markdown("**Google Gemini Setup:**")
-                st.markdown("1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey)")
+                st.markdown(
+                    "1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey)"
+                )
                 st.markdown("2. Click 'Create API Key'")
                 st.markdown("3. Copy the key (starts with AIza)")
                 st.markdown("4. Paste it in the Google field below")
-            
+
             with setup_col2:
                 st.markdown("**OpenAI Setup:**")
-                st.markdown("1. Go to [OpenAI Platform](https://platform.openai.com/api-keys)")
+                st.markdown(
+                    "1. Go to [OpenAI Platform](https://platform.openai.com/api-keys)"
+                )
                 st.markdown("2. Click 'Create new secret key'")
                 st.markdown("3. Copy the key (starts with sk-)")
                 st.markdown("4. Paste it in the OpenAI field below")
-            
+
             with setup_col3:
                 st.markdown("**Anthropic Setup:**")
-                st.markdown("1. Go to [Anthropic Console](https://console.anthropic.com/)")
+                st.markdown(
+                    "1. Go to [Anthropic Console](https://console.anthropic.com/)"
+                )
                 st.markdown("2. Create an account and add credits")
                 st.markdown("3. Generate API key (starts with sk-ant-)")
                 st.markdown("4. Paste it in the Claude field below")
@@ -1289,14 +1000,16 @@ def main():
         with col1:
             st.markdown("**Google Gemini**")
             st.markdown("• Free tier available")
-            st.markdown("• Get key from [Google AI Studio](https://aistudio.google.com/app/apikey)")
+            st.markdown(
+                "• Get key from [Google AI Studio](https://aistudio.google.com/app/apikey)"
+            )
             google_key_input = st.text_input(
                 "Google API Key",
                 type="password",
                 help="Get your key from Google AI Studio (aistudio.google.com)",
                 placeholder="AIza...",
                 key="byok_google",
-                value=st.session_state.saved_api_keys.get("Google", "")
+                value=st.session_state.saved_api_keys.get("Google", ""),
             )
             if google_key_input and not google_key_input.startswith("AIza"):
                 st.warning("Google API keys typically start with 'AIza'")
@@ -1306,14 +1019,16 @@ def main():
         with col2:
             st.markdown("**OpenAI GPT**")
             st.markdown("• Paid service")
-            st.markdown("• Get key from [OpenAI Platform](https://platform.openai.com/api-keys)")
+            st.markdown(
+                "• Get key from [OpenAI Platform](https://platform.openai.com/api-keys)"
+            )
             openai_key_input = st.text_input(
                 "OpenAI API Key",
                 type="password",
                 help="Get your key from OpenAI Platform (platform.openai.com)",
                 placeholder="sk-...",
                 key="byok_openai",
-                value=st.session_state.saved_api_keys.get("OpenAI", "")
+                value=st.session_state.saved_api_keys.get("OpenAI", ""),
             )
             if openai_key_input and not openai_key_input.startswith("sk-"):
                 st.warning("OpenAI API keys start with 'sk-'")
@@ -1323,14 +1038,16 @@ def main():
         with col3:
             st.markdown("**Anthropic Claude**")
             st.markdown("• Paid service")
-            st.markdown("• Get key from [Anthropic Console](https://console.anthropic.com/)")
+            st.markdown(
+                "• Get key from [Anthropic Console](https://console.anthropic.com/)"
+            )
             claude_key_input = st.text_input(
                 "Anthropic API Key",
                 type="password",
                 help="Get your key from Anthropic Console (console.anthropic.com)",
                 placeholder="sk-ant-...",
                 key="byok_claude",
-                value=st.session_state.saved_api_keys.get("Claude", "")
+                value=st.session_state.saved_api_keys.get("Claude", ""),
             )
             if claude_key_input and not claude_key_input.startswith("sk-ant-"):
                 st.warning("Anthropic API keys start with 'sk-ant-'")
@@ -1358,39 +1075,53 @@ def main():
                     provider_status.append(f"Available: {provider}")
                 else:
                     provider_status.append(f"Not set: {provider}")
-            
+
             st.info(f"**Provider Status:** {' | '.join(provider_status)}")
-            st.success(f"Ready to go with {', '.join(available_providers)} provider(s)!")
-            
+            st.success(
+                f"Ready to go with {', '.join(available_providers)} provider(s)!"
+            )
+
             # Add button to clear saved keys
-            if st.button("Clear Saved API Keys", help="Clear all API keys from this session"):
-                st.session_state.saved_api_keys = {"Google": "", "OpenAI": "", "Claude": ""}
+            if st.button(
+                "Clear Saved API Keys", help="Clear all API keys from this session"
+            ):
+                st.session_state.saved_api_keys = {
+                    "Google": "",
+                    "OpenAI": "",
+                    "Claude": "",
+                }
                 st.rerun()
-            
+
             # Add API key testing
             with st.expander("Test API Keys (Optional)", expanded=False):
                 st.markdown("Test your API keys to make sure they work:")
-                
+
                 for provider in available_providers:
                     col1, col2 = st.columns([3, 1])
-                    
+
                     with col1:
                         st.write(f"**{provider}** API Key")
-                    
+
                     with col2:
                         test_button_key = f"test_{provider.lower()}_key"
-                        if st.button(f"Test {provider}", key=test_button_key, help=f"Test your {provider} API key"):
+                        if st.button(
+                            f"Test {provider}",
+                            key=test_button_key,
+                            help=f"Test your {provider} API key",
+                        ):
                             with st.spinner(f"Testing {provider} API key..."):
                                 # Get the first available model for testing
-                                model_options = {
-                                    "Google": ["gemini-1.5-flash"],
-                                    "OpenAI": ["gpt-3.5-turbo"],
-                                    "Claude": ["claude-3-haiku-20240307"],
+                                test_models = {
+                                    "Google": "gemini-1.5-flash",
+                                    "OpenAI": "gpt-3.5-turbo",
+                                    "Claude": "claude-3-haiku-20240307",
                                 }
-                                test_model = model_options[provider][0]
-                                
-                                is_valid, message = test_api_key(provider, api_keys_dict[provider], test_model)
-                                
+                                test_model = test_models[provider]
+
+                                is_valid, message = test_api_key(
+                                    provider, api_keys_dict[provider], test_model
+                                )
+
                                 if is_valid:
                                     st.success(f"{provider}: {message}")
                                 else:
@@ -1402,42 +1133,50 @@ def main():
         # Show option to override environment keys
         with st.expander("Override API Keys (Optional)", expanded=False):
             st.markdown("**Override environment variables with custom keys:**")
-            st.info("**Tip:** Your environment already has API keys configured. You can optionally override them here.")
+            st.info(
+                "**Tip:** Your environment already has API keys configured. You can optionally override them here."
+            )
 
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                st.markdown(f"**Google:** {'Available' if api_keys_dict['Google'] else 'Not set'}")
+                st.markdown(
+                    f"**Google:** {'Available' if api_keys_dict['Google'] else 'Not set'}"
+                )
                 google_key_input = st.text_input(
                     "Google API Key",
                     type="password",
                     help="Override GOOGLE_API_KEY environment variable",
                     placeholder="Leave empty to use env var",
-                    key="override_google"
+                    key="override_google",
                 )
                 if google_key_input and not google_key_input.startswith("AIza"):
                     st.warning("Google API keys typically start with 'AIza'")
 
             with col2:
-                st.markdown(f"**OpenAI:** {'Available' if api_keys_dict['OpenAI'] else 'Not set'}")
+                st.markdown(
+                    f"**OpenAI:** {'Available' if api_keys_dict['OpenAI'] else 'Not set'}"
+                )
                 openai_key_input = st.text_input(
                     "OpenAI API Key",
                     type="password",
                     help="Override OPENAI_API_KEY environment variable",
                     placeholder="Leave empty to use env var",
-                    key="override_openai"
+                    key="override_openai",
                 )
                 if openai_key_input and not openai_key_input.startswith("sk-"):
                     st.warning("OpenAI API keys start with 'sk-'")
 
             with col3:
-                st.markdown(f"**Claude:** {'Available' if api_keys_dict['Claude'] else 'Not set'}")
+                st.markdown(
+                    f"**Claude:** {'Available' if api_keys_dict['Claude'] else 'Not set'}"
+                )
                 claude_key_input = st.text_input(
                     "Anthropic API Key",
                     type="password",
                     help="Override ANTHROPIC_API_KEY environment variable",
                     placeholder="Leave empty to use env var",
-                    key="override_claude"
+                    key="override_claude",
                 )
                 if claude_key_input and not claude_key_input.startswith("sk-ant-"):
                     st.warning("Anthropic API keys start with 'sk-ant-'")
@@ -1462,7 +1201,7 @@ def main():
                     provider_status.append(f"Available: {provider}")
                 else:
                     provider_status.append(f"Not set: {provider}")
-            
+
             st.info(f"**Current Status:** {' | '.join(provider_status)}")
 
         # Configuration summary outside the expander
@@ -1470,9 +1209,17 @@ def main():
             st.markdown("### Configuration Summary")
             st.markdown("**Your Current Setup:**")
             st.markdown(f"• **Available Providers:** {', '.join(available_providers)}")
-            st.markdown(f"• **Environment Keys:** {len([k for k in [GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY] if k])} configured")
-            st.markdown(f"• **Session Keys:** {len([k for k in st.session_state.saved_api_keys.values() if k])} entered")
-            st.markdown("• **Ready to Process:** Yes" if available_providers else "• **Ready to Process:** No")
+            st.markdown(
+                f"• **Environment Keys:** {len([k for k in [GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY] if k])} configured"
+            )
+            st.markdown(
+                f"• **Session Keys:** {len([k for k in st.session_state.saved_api_keys.values() if k])} entered"
+            )
+            st.markdown(
+                "• **Ready to Process:** Yes"
+                if available_providers
+                else "• **Ready to Process:** No"
+            )
 
     is_mobile = st.checkbox(
         "Mobile view", value=False, help="Check this for better mobile experience"
@@ -1482,16 +1229,26 @@ def main():
         st.markdown("---")
 
         with st.expander("Configuration", expanded=True):
+            st.markdown(
+                f"""
+            <div style="text-align: center; margin-bottom: 2rem; color: var(--text-accent);">
+                {svg_icons['upload']} <strong>Upload Your Resume</strong>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
             uploaded_resume = st.file_uploader(
                 "Upload Your Resume",
                 type=["txt", "md", "pdf", "docx"],
                 help="Supported formats: TXT, MD, PDF, DOCX",
                 key=f"mobile_uploader_{st.session_state.file_uploader_key}",
+                label_visibility="collapsed",
             )
 
             # Add clear resume button for mobile
             if uploaded_resume:
-                st.info(f"**Uploaded:** {uploaded_resume.name}")
+                st.success(f"**Uploaded:** {uploaded_resume.name}")
                 if st.button(
                     "Clear Resume",
                     key="clear_resume_mobile",
@@ -1513,31 +1270,6 @@ def main():
                 )
 
             with col2:
-                # Define model options based on provider
-                model_options = {
-                    "Google": [
-                        "gemini-2.0-flash-exp",
-                        "gemini-1.5-pro-latest",
-                        "gemini-1.5-pro",
-                        "gemini-1.5-flash",
-                        "gemini-1.5-flash-8b",
-                    ],
-                    "OpenAI": [
-                        "gpt-4o",
-                        "gpt-4o-mini", 
-                        "gpt-4-turbo",
-                        "gpt-4",
-                        "gpt-3.5-turbo"
-                    ],
-                    "Claude": [
-                        "claude-3-5-sonnet-20241022",
-                        "claude-3-5-haiku-20241022",
-                        "claude-3-opus-20240229",
-                        "claude-3-sonnet-20240229",
-                        "claude-3-haiku-20240307",
-                    ],
-                }
-
                 model_name = st.selectbox(
                     "Model",
                     options=model_options.get(model_provider, []),
@@ -1545,46 +1277,37 @@ def main():
                     key="mobile_model",
                     help="Choose the specific model",
                 )
-                
-                # Add model descriptions
-                model_descriptions = {
-                    "gemini-2.0-flash-exp": "Latest experimental model - fastest and most capable",
-                    "gemini-1.5-pro-latest": "Production-ready pro model - best balance",
-                    "gemini-1.5-pro": "Stable pro model - complex reasoning",
-                    "gemini-1.5-flash": "Fast model - good for quick tasks",
-                    "gemini-1.5-flash-8b": "Smallest model - ultra fast",
-                    "gpt-4o": "Latest GPT-4 - most capable OpenAI model",
-                    "gpt-4o-mini": "Smaller GPT-4 - good value",
-                    "gpt-4-turbo": "Fast GPT-4 - optimized for speed",
-                    "gpt-4": "Original GPT-4 - reliable and stable",
-                    "gpt-3.5-turbo": "Budget option - fast and cheap",
-                    "claude-3-5-sonnet-20241022": "Best Claude - excellent reasoning",
-                    "claude-3-5-haiku-20241022": "Fast Claude - quick responses", 
-                    "claude-3-opus-20240229": "Most capable Claude - complex tasks",
-                    "claude-3-sonnet-20240229": "Balanced Claude - good all-rounder",
-                    "claude-3-haiku-20240307": "Fastest Claude - simple tasks",
-                }
-                
+
                 if model_name in model_descriptions:
                     st.caption(model_descriptions[model_name])
-                
+
                 # Show cost estimation in mobile
-                if st.checkbox("Show Cost Estimates", help="Estimate costs for your current configuration", key="mobile_cost_check"):
+                if st.checkbox(
+                    "Show Cost Estimates",
+                    help="Estimate costs for your current configuration",
+                    key="mobile_cost_check",
+                ):
                     # Get rough estimates for cost calculation
-                    estimated_resume_length = 2000  # Average resume length in characters
-                    num_questions = len([q for q in st.session_state.questions if q.strip()])
-                    
+                    estimated_resume_length = (
+                        2000  # Average resume length in characters
+                    )
+                    num_questions = len(
+                        [q for q in st.session_state.questions if q.strip()]
+                    )
+
                     if num_questions > 0:
                         estimated_cost = estimate_cost(
-                            model_provider, 
-                            model_name, 
-                            estimated_resume_length, 
-                            num_questions, 
-                            word_limit if 'word_limit' in locals() else 100
+                            model_provider,
+                            model_name,
+                            estimated_resume_length,
+                            num_questions,
+                            word_limit if "word_limit" in locals() else 100,
                         )
-                        
+
                         st.info(f"**Estimated Cost:** {estimated_cost}")
-                        st.caption("*Based on average resume size and current questions*")
+                        st.caption(
+                            "*Based on average resume size and current questions*"
+                        )
 
         col1, col2 = st.columns(2)
         with col1:
@@ -1652,16 +1375,27 @@ def main():
     else:
 
         st.sidebar.markdown("### Configuration")
+
+        st.sidebar.markdown(
+            f"""
+        <div style="text-align: center; margin-bottom: 1.5rem; color: var(--text-accent);">
+            {svg_icons['upload']} <strong>Upload Your Resume</strong>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
         uploaded_resume = st.sidebar.file_uploader(
             "Upload Your Resume",
             type=["txt", "md", "pdf", "docx"],
             help="Supported formats: TXT, MD, PDF, DOCX",
             key=f"desktop_uploader_{st.session_state.file_uploader_key}",
+            label_visibility="collapsed",
         )
 
         # Add clear resume button for desktop
         if uploaded_resume:
-            st.sidebar.info(f"**Uploaded:** {uploaded_resume.name}")
+            st.sidebar.success(f"**Uploaded:** {uploaded_resume.name}")
             if st.sidebar.button(
                 "Clear Resume",
                 key="clear_resume_desktop",
@@ -1680,31 +1414,6 @@ def main():
             help="Choose your AI model provider",
         )
 
-        # Define model options based on provider
-        model_options = {
-            "Google": [
-                "gemini-2.0-flash-exp", 
-                "gemini-1.5-pro-latest",
-                "gemini-1.5-pro", 
-                "gemini-1.5-flash",
-                "gemini-1.5-flash-8b",
-            ],
-            "OpenAI": [
-                "gpt-4o", 
-                "gpt-4o-mini", 
-                "gpt-4-turbo",
-                "gpt-4",
-                "gpt-3.5-turbo"
-            ],
-            "Claude": [
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229",
-                "claude-3-sonnet-20240229",
-                "claude-3-haiku-20240307",
-            ],
-        }
-
         model_name = st.sidebar.selectbox(
             "Model",
             options=model_options.get(model_provider, []),
@@ -1712,46 +1421,31 @@ def main():
             key="desktop_model",
             help="Choose the specific model",
         )
-        
-        # Add model descriptions for desktop
-        model_descriptions = {
-            "gemini-2.0-flash-exp": "Latest experimental model - fastest and most capable",
-            "gemini-1.5-pro-latest": "Production-ready pro model - best balance",
-            "gemini-1.5-pro": "Stable pro model - complex reasoning",
-            "gemini-1.5-flash": "Fast model - good for quick tasks",
-            "gemini-1.5-flash-8b": "Smallest model - ultra fast",
-            "gpt-4o": "Latest GPT-4 - most capable OpenAI model",
-            "gpt-4o-mini": "Smaller GPT-4 - good value",
-            "gpt-4-turbo": "Fast GPT-4 - optimized for speed",
-            "gpt-4": "Original GPT-4 - reliable and stable",
-            "gpt-3.5-turbo": "Budget option - fast and cheap",
-            "claude-3-5-sonnet-20241022": "Best Claude - excellent reasoning",
-            "claude-3-5-haiku-20241022": "Fast Claude - quick responses", 
-            "claude-3-opus-20240229": "Most capable Claude - complex tasks",
-            "claude-3-sonnet-20240229": "Balanced Claude - good all-rounder",
-            "claude-3-haiku-20240307": "Fastest Claude - simple tasks",
-        }
-        
+
         if model_name in model_descriptions:
             st.sidebar.caption(model_descriptions[model_name])
-        
+
         # Show cost estimation in sidebar
-        if st.sidebar.checkbox("Show Cost Estimates", help="Estimate costs for your current configuration"):
+        if st.sidebar.checkbox(
+            "Show Cost Estimates", help="Estimate costs for your current configuration"
+        ):
             # Get rough estimates for cost calculation
             estimated_resume_length = 2000  # Average resume length in characters
             num_questions = len([q for q in st.session_state.questions if q.strip()])
-            
+
             if num_questions > 0:
                 estimated_cost = estimate_cost(
-                    model_provider, 
-                    model_name, 
-                    estimated_resume_length, 
-                    num_questions, 
-                    word_limit if 'word_limit' in locals() else 100
+                    model_provider,
+                    model_name,
+                    estimated_resume_length,
+                    num_questions,
+                    word_limit if "word_limit" in locals() else 100,
                 )
-                
+
                 st.sidebar.info(f"**Estimated Cost:** {estimated_cost}")
-                st.sidebar.caption("*Based on average resume size and current questions*")
+                st.sidebar.caption(
+                    "*Based on average resume size and current questions*"
+                )
 
         role = st.sidebar.text_input(
             "Target Role", placeholder="e.g., Senior Software Engineer"
@@ -1835,12 +1529,36 @@ def main():
             st.warning("Please enter at least one interview question.")
         else:
 
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # Enhanced progress bar with animated loading
+            progress_container = st.container()
+            with progress_container:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                # Add a loading animation
+                st.markdown(
+                    """
+                <div style="text-align: center; margin: 2rem 0;">
+                    <div style="display: inline-block; animation: spin 2s linear infinite;">
+                        """
+                    + svg_icons["brain"]
+                    + """
+                    </div>
+                    <p style="margin-top: 1rem; color: var(--text-secondary);">AI is working on your personalized responses...</p>
+                </div>
+                <style>
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                </style>
+                """,
+                    unsafe_allow_html=True,
+                )
 
             try:
 
-                status_text.text("Processing your resume...")
+                status_text.markdown("**Step 1:** Processing your resume...")
                 progress_bar.progress(20)
 
                 resume_bytes = uploaded_resume.read()
@@ -1855,7 +1573,9 @@ def main():
 
                 if file_extension in [".pdf", ".docx"]:
                     if raw_resume_text.strip():
-                        status_text.text("AI is formatting your resume...")
+                        status_text.markdown(
+                            "**Step 2:** AI is formatting your resume..."
+                        )
                         progress_bar.progress(60)
                         resume_text = format_resume_text_with_llm(
                             raw_resume_text, model_provider, model_name, api_keys_dict
@@ -1877,7 +1597,7 @@ def main():
                     )
                     st.stop()
 
-                status_text.text(f"Researching {company}...")
+                status_text.markdown(f"**Step 3:** Researching {company}...")
                 progress_bar.progress(70)
                 company_research_data = ""
                 if company.strip():
@@ -1890,7 +1610,9 @@ def main():
                     ):
                         st.markdown(company_research_data)
 
-                status_text.text("✨ AI is crafting your personalized answers...")
+                status_text.markdown(
+                    "**Step 4:** AI is crafting your personalized answers..."
+                )
                 progress_bar.progress(90)
 
                 valid_questions = [
@@ -1914,27 +1636,37 @@ def main():
                 )
 
                 progress_bar.progress(100)
-                status_text.text("Complete!")
+                status_text.markdown("**Complete!** Your answers are ready")
 
-                progress_bar.empty()
-                status_text.empty()
+                # Clear the loading animation
+                progress_container.empty()
 
                 if answers:
-                    st.success("Your personalized interview answers are ready!")
+                    st.markdown(
+                        f"""
+                    <div style="text-align: center; margin: 2rem 0; padding: 2rem; background: var(--glass-bg); 
+                         backdrop-filter: var(--backdrop-blur); border-radius: var(--border-radius-large); 
+                         border: 2px solid var(--success);">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">{svg_icons['check']}</div>
+                        <h2 style="color: var(--success); margin: 0;">Your personalized interview answers are ready!</h2>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">
+                            Tailored specifically for {role} at {company}
+                        </p>
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
 
-                    # --- MODIFICATION START ---
-                    # JavaScript for clipboard functionality with a fallback for non-secure contexts (like HTTP)
-                    copy_js = """
+                    # Enhanced JavaScript for clipboard functionality
+                    copy_js = (
+                        """
                     function copyToClipboard(textToCopy, buttonId) {
                         const fallbackCopy = (text) => {
                             const textArea = document.createElement("textarea");
                             textArea.value = text;
-                            
-                            // Avoid scrolling to bottom
                             textArea.style.top = "0";
                             textArea.style.left = "0";
                             textArea.style.position = "fixed";
-
                             document.body.appendChild(textArea);
                             textArea.focus();
                             textArea.select();
@@ -1943,7 +1675,7 @@ def main():
                             try {
                                 success = document.execCommand('copy');
                             } catch (err) {
-                                console.error('Fallback: Oops, unable to copy', err);
+                                console.error('Fallback: Unable to copy', err);
                             }
 
                             document.body.removeChild(textArea);
@@ -1952,13 +1684,20 @@ def main():
 
                         const button = document.getElementById(buttonId);
                         if (!button) return;
-                        const originalText = button.innerText;
+                        const originalText = button.innerHTML;
+                        const originalClass = button.className;
 
                         if (!navigator.clipboard) {
                             fallbackCopy(textToCopy).then((success) => {
                                 if (success) {
-                                    button.innerText = 'Copied!';
-                                    setTimeout(() => { button.innerText = originalText; }, 2000);
+                                    button.innerHTML = '"""
+                        + svg_icons["check"]
+                        + """ Copied!';
+                                    button.className = originalClass + ' copy-button-copied';
+                                    setTimeout(() => { 
+                                        button.innerHTML = originalText; 
+                                        button.className = originalClass;
+                                    }, 2000);
                                 } else {
                                     alert('Failed to copy text. Please copy manually.');
                                 }
@@ -1967,15 +1706,26 @@ def main():
                         }
 
                         navigator.clipboard.writeText(textToCopy).then(() => {
-                            button.innerText = 'Copied!';
-                            setTimeout(() => { button.innerText = originalText; }, 2000);
+                            button.innerHTML = '"""
+                        + svg_icons["check"]
+                        + """ Copied!';
+                            button.className = originalClass + ' copy-button-copied';
+                            setTimeout(() => { 
+                                button.innerHTML = originalText; 
+                                button.className = originalClass;
+                            }, 2000);
                         }).catch(err => {
-                            console.error('Async: Could not copy text: ', err);
-                            // If clipboard API fails (e.g., permissions), try the fallback
+                            console.error('Clipboard API failed: ', err);
                             fallbackCopy(textToCopy).then((success) => {
                                 if (success) {
-                                    button.innerText = 'Copied!';
-                                    setTimeout(() => { button.innerText = originalText; }, 2000);
+                                    button.innerHTML = '"""
+                        + svg_icons["check"]
+                        + """ Copied!';
+                                    button.className = originalClass + ' copy-button-copied';
+                                    setTimeout(() => { 
+                                        button.innerHTML = originalText; 
+                                        button.className = originalClass;
+                                    }, 2000);
                                 } else {
                                     alert('Failed to copy text. Please copy manually.');
                                 }
@@ -1983,7 +1733,7 @@ def main():
                         });
                     }
                     """
-                    # --- MODIFICATION END ---
+                    )
                     st.markdown(f"<script>{copy_js}</script>", unsafe_allow_html=True)
 
                     for i, item in enumerate(answers, start=1):
@@ -1996,15 +1746,18 @@ def main():
                                 <div class="question-header">
                                     <span>Question {i}</span>
                                 </div>
-                                <div style="color: var(--text-secondary); margin-bottom: 1rem; font-style: italic;">
+                                <div style="color: var(--text-accent); margin-bottom: 1.5rem; font-style: italic; 
+                                     font-size: 1.1rem; line-height: 1.6; padding: 1rem; 
+                                     background: rgba(99, 102, 241, 0.1); border-radius: var(--border-radius-small); 
+                                     border-left: 4px solid var(--primary-color);">
                                     "{item['question']}"
                                 </div>
                                 <div class="answer-text">
-                                    <strong>Your Answer:</strong><br>
+                                    <strong style="color: var(--primary-light); font-size: 1.1rem;">Your Answer:</strong><br><br>
                                     {item['answer']}
                                 </div>
                                 <button id="{button_id}" class="copy-button" onclick='copyToClipboard({answer_text_json}, "{button_id}")'>
-                                    Copy Answer
+                                    {svg_icons['copy']} Copy Answer
                                 </button>
                             </div>""",
                             unsafe_allow_html=True,
@@ -2016,8 +1769,7 @@ def main():
                     st.info("ℹ️ No questions were provided to generate answers for.")
 
             except Exception as e:
-                progress_bar.empty()
-                status_text.empty()
+                progress_container.empty()
                 st.error(f"An error occurred during answer generation: {e}")
                 st.error("Please try again or check your inputs.")
 
